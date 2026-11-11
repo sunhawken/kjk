@@ -3,15 +3,22 @@
 //! would make (`sim::input`: a seat's command is all the sim ever sees).
 //! It never moves a body, sets a flag or advances a quest itself.
 //!
-//! Version 0 follows the first seat's body: turn to it, run when far, walk
-//! when near, stand when close. It walks straight at it (no pathfinding
-//! yet) and reports where it is, so a run can show it moved
-//! (`KJK_AI_SEAT=1` turns it on for a joined seat).
+//! Version 0 follows the first seat's body: it stands when close, and else
+//! walks the navigation mesh's route to it (`sim::walk::Walker`, the walker
+//! the playthrough harness uses), replanned when the leader moves. It
+//! reports where it is, so a run can show it moved (`KJK_AI_SEAT=1` turns it
+//! on for a joined seat).
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::prelude::info;
+use sim::module::ObjectKind;
+use sim::motion::{SOLE_Z, UNIT};
 use sim::moves::view_angles;
 use sim::script::dialogue::{Pick, answer};
+use sim::walk::Walker;
 use sim::{Command, Seat, Snapshot, buttons};
+use sim::{Kind, Level, ObjectState, TickRate};
 
 /// Within this many metres of the leader the seat stands.
 const STAND_WITHIN_M: f32 = 2.5;
@@ -24,6 +31,13 @@ const RUN_AXIS: i8 = 127;
 /// skipped each time. It never picks a reply: the story's choices stay the
 /// human player's.
 const SKIP_EVERY_TICKS: u64 = 25;
+/// The leader must move this far (metres) before the route is planned again.
+const REPLAN_M: f32 = 3.0;
+/// A closed door this close (metres, across the floor) gets the use key.
+const DOOR_REACH_M: f32 = 2.2;
+/// The use key is pressed for this many of every `USE_PERIOD_TICKS`.
+const USE_HELD_TICKS: u64 = 4;
+const USE_PERIOD_TICKS: u64 = 20;
 /// Ticks between position reports in the log.
 const REPORT_TICKS: u64 = 50;
 
@@ -58,6 +72,15 @@ pub struct AiSeat {
     /// The answer byte held for the sim (`Command::reply`).
     reply: u8,
     skipped: u64,
+    /// The route to the leader, planned through the navigation mesh, and
+    /// where the leader stood when it was.
+    walker: Option<Walker>,
+    planned_at: [f32; 3],
+    explained: u64,
+    /// Doors the story opens when used though they start locked (they
+    /// have an `OnFailToOpen` script): planned through, as the playthrough
+    /// harness does; for the level named here.
+    tried: (String, BTreeSet<u32>),
 }
 
 impl Default for AiSeat {
@@ -74,11 +97,15 @@ impl AiSeat {
             reported: 0,
             reply: 0,
             skipped: 0,
+            walker: None,
+            planned_at: [0.0; 3],
+            explained: 0,
+            tried: (String::new(), BTreeSet::new()),
         }
     }
 
     /// The command for `tick` of `seat`, from the snapshot it predicts.
-    pub fn decide(&mut self, snapshot: &Snapshot, seat: Seat, tick: u64) -> Command {
+    pub fn decide(&mut self, level: &Level, snapshot: &Snapshot, seat: Seat, tick: u64) -> Command {
         // A conversation holds the world until its lines are passed.
         if snapshot.talk_for(seat).is_some() {
             if tick >= self.skipped + SKIP_EVERY_TICKS {
@@ -128,6 +155,86 @@ impl AiSeat {
         }
         let angles = view_angles(0.0, yaw_toward(me, leader));
         let reply = self.reply;
+        // Walk the navigation mesh's route to the leader when the body has
+        // a motion state; else straight at it.
+        if mode != Gait::Stand
+            && let Some(player) = snapshot.body(seat).and_then(|body| body.player)
+        {
+            let leader_moved = ((leader[0] - self.planned_at[0]).powi(2)
+                + (leader[1] - self.planned_at[1]).powi(2))
+            .sqrt()
+                > REPLAN_M;
+            if self.walker.is_none() || leader_moved {
+                let soles = (player.origin[2] + SOLE_Z) * UNIT;
+                let floor = level
+                    .nav()
+                    .and_then(|nav| nav.height([leader[0], leader[1], soles], 50.0, 50.0))
+                    .unwrap_or(leader[2]);
+                self.walker = Some(Walker::new([
+                    leader[0] / UNIT,
+                    leader[1] / UNIT,
+                    floor / UNIT - SOLE_Z,
+                ]));
+                self.planned_at = leader;
+            }
+            if self.tried.0 != level.name() {
+                self.tried = (
+                    level.name().to_string(),
+                    (0u32..)
+                        .zip(level.placed().iter())
+                        .filter(|(_, object)| {
+                            object.kind == ObjectKind::Door
+                                && object
+                                    .scripts
+                                    .iter()
+                                    .any(|(hook, _)| hook == "OnFailToOpen")
+                        })
+                        .map(|(index, _)| index)
+                        .collect(),
+                );
+            }
+            let tried = &self.tried.1;
+            let doors: BTreeMap<u32, ObjectState> = snapshot
+                .entities
+                .iter()
+                .filter_map(|entity| match (entity.kind, entity.object) {
+                    (Kind::Object(_, index), Some(object)) => Some((index, object)),
+                    _ => None,
+                })
+                .collect();
+            let now_ms = TickRate::default().time_ms(tick);
+            if let Some(walker) = self.walker.as_mut() {
+                let mut command = walker.command_eager(level, &player, now_ms, &|index| {
+                    let mut state = doors.get(&index).copied().unwrap_or(ObjectState::GONE);
+                    if tried.contains(&index) {
+                        state.lock = sim::lock::UNLOCKED;
+                    }
+                    state
+                });
+                command.reply = reply;
+                // A closed door close by: press use on it, as a player does.
+                let door_near = snapshot.entities.iter().any(|entity| {
+                    matches!(entity.kind, Kind::Object(ObjectKind::Door, _))
+                        && entity.object.is_some_and(|object| object.state == 0)
+                        && ((entity.position[0] - me[0]).powi(2)
+                            + (entity.position[1] - me[1]).powi(2))
+                        .sqrt()
+                            < DOOR_REACH_M
+                });
+                if door_near && tick % USE_PERIOD_TICKS < USE_HELD_TICKS {
+                    command.buttons |= buttons::USE;
+                }
+                if command.forward == 0
+                    && command.right == 0
+                    && tick >= self.explained + REPORT_TICKS
+                {
+                    self.explained = tick;
+                    let why = sim::walk::why_none(level, player.origin, walker.goal);
+                    info!(target: "ai_seat", "tick {tick} the walker stands still: {why} (from {:?} to {:?} units)", player.origin, walker.goal);
+                }
+                return command;
+            }
+        }
         match mode {
             Gait::Stand => Command {
                 angles,
