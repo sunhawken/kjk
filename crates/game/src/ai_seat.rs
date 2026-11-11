@@ -152,6 +152,97 @@ fn nearest_enemy(
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
+/// How the seat chooses a reply when the human has handed the choices over
+/// (`KJK_AI_DELEGATE`: `light`, `dark` or `walkthrough`, which is light
+/// unless the route data names the reply). Off, it never picks a reply: it
+/// only skips lines and the human chooses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delegate {
+    Light,
+    Dark,
+}
+
+/// Words that mark a reply as kind or as harsh, after the walkthrough's own
+/// advice ("let her go for Light Side points, kill her for Dark Side
+/// points"). A rough guide: the data carries no alignment tag for a reply.
+const LIGHT_WORDS: &[&str] = &[
+    "help",
+    "spare",
+    "let you",
+    "let her",
+    "let him",
+    "free",
+    "mercy",
+    "peace",
+    "sorry",
+    "forgive",
+    "protect",
+    "rescue",
+    "save",
+    "honor",
+    "trust",
+    "please",
+    "thank",
+    "together",
+    "of course",
+];
+const DARK_WORDS: &[&str] = &[
+    "kill",
+    "die",
+    "threat",
+    "pay",
+    "credits",
+    "weak",
+    "fool",
+    "destroy",
+    "beg",
+    "power",
+    "shut up",
+    "pathetic",
+    "worthless",
+    "suffer",
+];
+/// A reply that walks out of the conversation: chosen last.
+const EXIT_WORDS: &[&str] = &[
+    "goodbye",
+    "farewell",
+    "leave",
+    "never mind",
+    "not now",
+    "nothing",
+];
+
+/// Which reply (an index into `texts`) the delegate picks and why:
+/// a reply holding a phrase the route data says (`says`, lowercase) first,
+/// else the best score by the policy, an exit last.
+pub fn pick_reply(texts: &[String], says: &[String], policy: Delegate) -> Option<(usize, String)> {
+    let lower: Vec<String> = texts.iter().map(|text| text.to_lowercase()).collect();
+    if let Some((index, phrase)) = lower.iter().enumerate().find_map(|(index, text)| {
+        says.iter()
+            .find(|phrase| !phrase.is_empty() && text.contains(phrase.as_str()))
+            .map(|phrase| (index, phrase.clone()))
+    }) {
+        return Some((index, format!("the route says \"{phrase}\"")));
+    }
+    let score = |text: &str| -> i32 {
+        let count =
+            |words: &[&str]| words.iter().filter(|word| text.contains(**word)).count() as i32;
+        let kind = count(LIGHT_WORDS) - count(DARK_WORDS);
+        let tone = if policy == Delegate::Light {
+            kind
+        } else {
+            -kind
+        };
+        tone - 5 * count(EXIT_WORDS)
+    };
+    let best = lower
+        .iter()
+        .enumerate()
+        .max_by_key(|(index, text)| (score(text), -(*index as i32)))
+        .map(|(index, text)| (index, score(text)))?;
+    Some((best.0, format!("{policy:?} policy, score {}", best.1)))
+}
+
 pub struct AiSeat {
     travelled_m: f32,
     last: Option<[f32; 3]>,
@@ -172,6 +263,13 @@ pub struct AiSeat {
     lead_tag: Option<String>,
     lead_arrived: bool,
     lead_waiting: bool,
+    /// Set when the human handed the choices over (`KJK_AI_DELEGATE`).
+    pub delegate: Option<Delegate>,
+    /// Reply phrases the route data says, lowercase (`KJK_AI_SAY_FILE`, one
+    /// per line).
+    says: Vec<String>,
+    /// The conversation line already answered: (dialog, entry).
+    answered: Option<(String, u32)>,
     /// Doors the story opens when used though they start locked (they
     /// have an `OnFailToOpen` script): planned through, as the playthrough
     /// harness does; for the level named here.
@@ -206,6 +304,22 @@ impl AiSeat {
                 .filter(|tag| !tag.is_empty()),
             lead_arrived: false,
             lead_waiting: false,
+            delegate: match std::env::var("KJK_AI_DELEGATE").ok().as_deref() {
+                Some("light" | "walkthrough") => Some(Delegate::Light),
+                Some("dark") => Some(Delegate::Dark),
+                _ => None,
+            },
+            says: std::env::var("KJK_AI_SAY_FILE")
+                .ok()
+                .and_then(|path| std::fs::read_to_string(path).ok())
+                .map(|text| {
+                    text.lines()
+                        .map(|line| line.trim().to_lowercase())
+                        .filter(|line| !line.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            answered: None,
             // KJK_AI_HEAL_BELOW (percent) overrides the threshold, to try the
             // heal without being hurt.
             heal_below: std::env::var("KJK_AI_HEAL_BELOW")
@@ -232,10 +346,11 @@ impl AiSeat {
         level: &Level,
         snapshot: &Snapshot,
         remote: &Snapshot,
+        replies: &[String],
         seat: Seat,
         tick: u64,
     ) -> Command {
-        let mut command = self.steer(level, snapshot, remote, seat, tick);
+        let mut command = self.steer(level, snapshot, remote, replies, seat, tick);
         // Use a medpac when hurt (a press: the sim takes the first it finds).
         let body = snapshot.body(seat);
         if let (Some(fighter), Some(sheet)) =
@@ -260,11 +375,29 @@ impl AiSeat {
         level: &Level,
         snapshot: &Snapshot,
         remote: &Snapshot,
+        replies: &[String],
         seat: Seat,
         tick: u64,
     ) -> Command {
         // A conversation holds the world until its lines are passed.
-        if snapshot.talk_for(seat).is_some() {
+        if let Some(talk) = snapshot.talk_for(seat) {
+            // Handed the choices, the seat answers a reply once per line.
+            if let Some(policy) = self.delegate
+                && !talk.replies.is_empty()
+                && !replies.is_empty()
+                && self.answered.as_ref() != Some(&(talk.dialog.clone(), talk.entry))
+                && tick >= self.skipped + SKIP_EVERY_TICKS
+                && let Some((index, why)) = pick_reply(replies, &self.says, policy)
+            {
+                self.skipped = tick;
+                self.answered = Some((talk.dialog.clone(), talk.entry));
+                self.reply = answer(self.reply, Pick::Reply(index as u8));
+                info!(target: "ai_seat", "tick {tick} delegated choice in {} entry {}: reply {} of {} ({why}): {:?}", talk.dialog, talk.entry, index + 1, replies.len(), replies[index]);
+                return Command {
+                    reply: self.reply,
+                    ..Command::default()
+                };
+            }
             if tick >= self.skipped + SKIP_EVERY_TICKS {
                 self.skipped = tick;
                 self.reply = answer(self.reply, Pick::Skip);

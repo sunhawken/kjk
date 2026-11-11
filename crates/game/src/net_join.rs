@@ -575,11 +575,38 @@ pub(crate) fn advance(
     let rate = TickRate::default();
     let seat = joined.joining.seat;
     let level = joined.level.clone();
+    // Reply texts for the conversation the seat stands in, only when the AI
+    // has been handed the choices (the library's replies, the install's text).
+    let reply_texts: Vec<String> = match (
+        joined.ai.as_ref().and_then(|ai| ai.delegate),
+        joined.lifecycle.as_ref(),
+    ) {
+        (Some(_), Some(lifecycle)) => own
+            .presented
+            .current()
+            .talk_for(seat)
+            .map(|talk| {
+                let said = |strref| lifecycle.installer.text(strref);
+                talk.replies
+                    .iter()
+                    .map(|reply| {
+                        level
+                            .scripts()
+                            .and_then(|library| library.dialogue(&talk.dialog))
+                            .and_then(|dlg| dlg.replies.get(*reply as usize))
+                            .map_or_else(String::new, |node| crate::transcript::text(&said, node))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
     let ai_command = match (joined.ai.as_mut(), next_tick) {
         (Some(ai), Some(tick)) => Some(ai.decide(
             &level,
             own.presented.current(),
             presented.0.current(),
+            &reply_texts,
             seat,
             tick,
         )),
