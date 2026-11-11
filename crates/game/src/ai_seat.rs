@@ -280,6 +280,13 @@ pub struct AiSeat {
     /// have an `OnFailToOpen` script): planned through, as the playthrough
     /// harness does; for the level named here.
     tried: (String, BTreeSet<u32>),
+    /// Doors that lead out of the area (they have a `link`) and the floor
+    /// under triggers that do: the seat never uses the first (a use takes
+    /// the whole party to another area) and plans its routes off the
+    /// second (walking onto one does the same). For the level named.
+    exits_for: String,
+    exit_doors: BTreeSet<u32>,
+    exit_floor: Vec<bool>,
     /// Actions this tick asks of the host (unlock or open a door), taken by
     /// the caller after `decide` and sent beside the command.
     pending: Vec<Action>,
@@ -336,6 +343,9 @@ impl AiSeat {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(HEAL_BELOW_PERCENT),
             tried: (String::new(), BTreeSet::new()),
+            exits_for: String::new(),
+            exit_doors: BTreeSet::new(),
+            exit_floor: Vec::new(),
             pending: Vec::new(),
             door_acted: BTreeMap::new(),
         }
@@ -706,7 +716,28 @@ impl AiSeat {
                         .collect(),
                 );
             }
+            if self.exits_for != level.name() {
+                self.exits_for = level.name().to_string();
+                self.exit_doors = (0u32..)
+                    .zip(level.placed().iter())
+                    .filter(|(_, object)| object.kind == ObjectKind::Door && object.link.is_some())
+                    .map(|(index, _)| index)
+                    .collect();
+                let mut floor: Vec<bool> = Vec::new();
+                for object in level.placed().iter() {
+                    if object.kind == ObjectKind::Trigger && object.link.is_some() {
+                        let under = sim::walk::faces_under(level, object);
+                        floor.resize(floor.len().max(under.len()), false);
+                        for (wall, face) in floor.iter_mut().zip(under) {
+                            *wall |= face;
+                        }
+                    }
+                }
+                self.exit_floor = floor;
+            }
             let tried = &self.tried.1;
+            let exit_doors = &self.exit_doors;
+            let exit_floor = &self.exit_floor;
             let doors: BTreeMap<u32, ObjectState> = snapshot
                 .entities
                 .iter()
@@ -717,21 +748,29 @@ impl AiSeat {
                 .collect();
             let now_ms = TickRate::default().time_ms(tick);
             if let Some(walker) = self.walker.as_mut() {
-                let mut command = walker.command_eager(level, &player, now_ms, &|index| {
+                let door_state = |index: u32| {
                     let mut state = doors.get(&index).copied().unwrap_or(ObjectState::GONE);
                     let opens_at_all = level
                         .placed()
                         .get(index as usize)
                         .is_some_and(|object| object.opens != Opens::Never);
-                    if tried.contains(&index) || opens_at_all {
+                    if exit_doors.contains(&index) {
+                        // A way out of the area: not a way for the partner.
+                        state.lock = sim::lock::LOCKED;
+                    } else if tried.contains(&index) || opens_at_all {
                         state.lock = sim::lock::UNLOCKED;
                     }
                     state
-                });
+                };
+                let ways = sim::walk::Walled {
+                    doors: &door_state,
+                    walled: exit_floor,
+                };
+                let mut command = walker.command_eager(level, &player, now_ms, &ways);
                 command.reply = reply;
                 // A closed door close by: press use on it, as a player does.
                 let door_near = snapshot.entities.iter().any(|entity| {
-                    matches!(entity.kind, Kind::Object(ObjectKind::Door, _))
+                    matches!(entity.kind, Kind::Object(ObjectKind::Door, index) if !exit_doors.contains(&index))
                         && entity.object.is_some_and(|object| object.state == 0)
                         && ((entity.position[0] - me[0]).powi(2)
                             + (entity.position[1] - me[1]).powi(2))
@@ -748,7 +787,7 @@ impl AiSeat {
                     .iter()
                     .filter_map(|entity| match (entity.kind, entity.object) {
                         (Kind::Object(ObjectKind::Door, index), Some(object))
-                            if object.state == 0 =>
+                            if object.state == 0 && !exit_doors.contains(&index) =>
                         {
                             let d = ((entity.position[0] - me[0]).powi(2)
                                 + (entity.position[1] - me[1]).powi(2))
