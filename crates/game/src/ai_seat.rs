@@ -63,6 +63,8 @@ const LEAD_ARRIVE_M: f32 = 2.0;
 /// gone back to, so the seat never abandons them (and never deadlocks when
 /// the story starts it far away).
 const LEAD_RETURN_M: f32 = 40.0;
+/// The partner answers a ready check only after it has stood this long (ms).
+const READY_AFTER_MS: u64 = 3000;
 /// Ticks between the partner's answers to a ready check.
 const READY_EVERY_TICKS: u64 = 50;
 /// Ticks between position reports in the log.
@@ -437,9 +439,15 @@ impl AiSeat {
         // Someone else walked into an exit: the party goes when everyone is
         // ready, and the partner follows, so it says it is (a seat that never
         // answers would hold the party at the exit for good).
+        // Readying from a conversation would leave it (and abort the scene
+        // it belongs to), so only when none holds the world, and after the
+        // proposal has stood a moment so a scripted scene can play first.
         if let Some(check) = &remote.ready
             && check.asked_by != seat
             && check.ready & (1u64 << seat.0) == 0
+            && !remote.holds_world()
+            && remote.talk_for(seat).is_none()
+            && remote.time_ms >= check.since_ms + READY_AFTER_MS
             && tick >= self.readied + READY_EVERY_TICKS
         {
             self.readied = tick;
@@ -492,6 +500,13 @@ impl AiSeat {
                     reply: self.reply,
                     ..Command::default()
                 };
+            }
+            // Lines of a conversation the seat's own body is in are skipped to
+            // keep the world moving; a party conversation belongs to the human
+            // (its listener), whose lines the partner leaves alone, so the
+            // human reads them and clicks through at their own pace.
+            if snapshot.stands_in(seat).is_none() {
+                return Command::default();
             }
             if tick >= self.skipped + SKIP_EVERY_TICKS {
                 self.skipped = tick;
