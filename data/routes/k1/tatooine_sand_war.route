@@ -30,6 +30,10 @@ fight 25
 exit TatooineDoor3       # the Sand People's enclave (tat_m20aa)
 save tsw_sand_enclave
 fight 20
+if in tat_m18ab          # the chase took the party out by the Sand People's exit (tat18_tuskenexit): back in
+exit TatooineDoor3
+fight 20
+end
 to tat20_09chief_01      # the chieftain and his warriors
 fight 25
 use tat20_09chief_01     # his remains: his gaffi stick, the Dune Sea's map
