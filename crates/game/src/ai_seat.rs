@@ -298,6 +298,33 @@ pub struct AiSeat {
     /// the caller after `decide` and sent beside the command.
     pending: Vec<Action>,
     door_acted: BTreeMap<u32, u64>,
+    /// The optional language model (`ai_brain`): it only advises.
+    brain: Option<crate::ai_brain::Llm>,
+    brain_id: u64,
+    brain_sent: u64,
+    /// The request id and conversation line a model's reply is waited for,
+    /// with the tick it was asked.
+    brain_wait: Option<(u64, (String, u32), u64)>,
+    /// A reply the model chose for a conversation line: (line, zero-based).
+    brain_pick: Option<((String, u32), usize)>,
+    /// Calls the model made that passed the checks, and that did not.
+    llm_calls: u64,
+    llm_dropped: u64,
+    llm_errors: u64,
+    /// The model or the human asked the seat to stand where it is.
+    hold: bool,
+    /// A medpac asked for by the model.
+    force_heal: bool,
+    /// Every delegated choice waits for the human's `answer` (control file),
+    /// with the question, the seat's recommendation and a note of what the
+    /// choice may cost written to `<control>.pending.json`.
+    confirm: bool,
+    /// The human's answer to the open question (zero-based).
+    human_answer: Option<(Option<String>, usize)>,
+    /// The line whose question was written.
+    asked_human: Option<(String, u32)>,
+    /// Where each delegated choice is logged, one JSON line each.
+    decisions: Option<std::path::PathBuf>,
 }
 
 impl Default for AiSeat {
@@ -356,6 +383,20 @@ impl AiSeat {
             exit_floor: Vec::new(),
             pending: Vec::new(),
             door_acted: BTreeMap::new(),
+            brain: crate::ai_brain::Llm::from_env(),
+            brain_id: 0,
+            brain_sent: 0,
+            brain_wait: None,
+            brain_pick: None,
+            llm_calls: 0,
+            llm_dropped: 0,
+            llm_errors: 0,
+            hold: false,
+            force_heal: false,
+            confirm: std::env::var_os("KJK_AI_CONFIRM").is_some(),
+            human_answer: None,
+            asked_human: None,
+            decisions: std::env::var_os("KJK_AI_DECISIONS").map(std::path::PathBuf::from),
         }
     }
 
@@ -398,6 +439,22 @@ impl AiSeat {
                 self.lead_waiting = false;
             }
         }
+        if let Some(confirm) = value.get("confirm").and_then(|v| v.as_bool()) {
+            self.confirm = confirm;
+        }
+        if let Some(hold) = value.get("hold").and_then(|v| v.as_bool()) {
+            self.hold = hold;
+        }
+        // The human's answer to the open question: a reply number counting
+        // from one, or "recommended".
+        let for_line = value.get("for").and_then(|v| v.as_str()).map(str::to_string);
+        self.human_answer = match value.get("answer") {
+            Some(v) if v.as_u64().is_some_and(|n| n >= 1) => {
+                v.as_u64().map(|n| (for_line, n as usize - 1))
+            }
+            Some(v) if v.as_str() == Some("recommended") => Some((for_line, usize::MAX)),
+            _ => None,
+        };
         if let Some(file) = value.get("say_file").and_then(|file| file.as_str()) {
             self.says = std::fs::read_to_string(file)
                 .map(|text| {
@@ -409,6 +466,196 @@ impl AiSeat {
                 .unwrap_or_default();
         }
         info!(target: "ai_seat", "tick {tick} control changed: delegate {:?}, lead_to {:?}, {} reply phrases", self.delegate, self.lead_tag, self.says.len());
+    }
+
+
+    /// The question for a delegated choice, as the model is asked it.
+    fn choice_prompt(
+        &self,
+        dialog: &str,
+        replies: &[String],
+        recommended: usize,
+        policy: Delegate,
+    ) -> String {
+        let side = match policy {
+            Delegate::Light => "the light side / the walkthrough's way",
+            Delegate::Dark => "the dark side",
+        };
+        let list: Vec<String> = replies
+            .iter()
+            .enumerate()
+            .map(|(i, text)| format!("{}. {text}", i + 1))
+            .collect();
+        format!(
+            "The human handed this conversation choice ({}) to you; favour {side}. The rules would pick {}. Offered replies:\n{}\nAnswer with one pick call.",
+            dialog,
+            recommended + 1,
+            list.join("\n")
+        )
+    }
+
+    /// Takes the model's answers that have come: each call is checked
+    /// (`ai_brain::validate`) and then applied; one that fails is dropped.
+    fn poll_brain(&mut self, level: &Level, replies: &[String], tick: u64) {
+        while let Some(brain) = &self.brain
+            && let Some(answer) = brain.poll()
+        {
+            let text = match answer.text {
+                Ok(text) => text,
+                Err(error) => {
+                    self.llm_errors += 1;
+                    info!(target: "ai_seat", "tick {tick} the model gave no answer ({error}); the seat's own rules go on");
+                    continue;
+                }
+            };
+            let legal = crate::ai_brain::Legal {
+                tags: level
+                    .placed()
+                    .iter()
+                    .map(|object| object.tag.to_ascii_lowercase())
+                    .filter(|tag| !tag.is_empty())
+                    .collect(),
+                replies: replies.len(),
+            };
+            let (tools, dropped) = crate::ai_brain::validate(&text, &legal);
+            self.llm_dropped += dropped as u64;
+            for tool in tools {
+                self.llm_calls += 1;
+                info!(target: "ai_seat", "tick {tick} model call: {tool:?}");
+                match tool {
+                    crate::ai_brain::Tool::Follow => {
+                        self.hold = false;
+                        self.lead_tag = None;
+                    }
+                    crate::ai_brain::Tool::Hold => self.hold = true,
+                    crate::ai_brain::Tool::Heal => self.force_heal = true,
+                    crate::ai_brain::Tool::LeadTo(tag) => {
+                        if self.lead_tag.as_deref() != Some(&tag) {
+                            self.lead_tag = Some(tag);
+                            self.lead_arrived = false;
+                            self.lead_waiting = false;
+                        }
+                    }
+                    crate::ai_brain::Tool::Pick(n) => {
+                        if let Some((_, line, _)) = &self.brain_wait {
+                            self.brain_pick = Some((line.clone(), n));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Now and then, outside a conversation, tells the model how things
+    /// stand and asks for advice (every ~16 s of play).
+    fn advise(&mut self, level: &Level, snapshot: &Snapshot, remote: &Snapshot, seat: Seat, tick: u64) {
+        if self.brain.is_none()
+            || tick < self.brain_sent + 2000
+            || snapshot.talk_for(seat).is_some()
+            || remote.holds_world()
+        {
+            return;
+        }
+        self.brain_sent = tick;
+        let share = |body: Option<&sim::EntityState>| {
+            body.and_then(|b| Some((b.fighter?, b.sheet?)))
+                .filter(|(_, sheet)| sheet.max_hp > 0)
+                .map(|(fighter, sheet)| fighter.hp * 100 / (i32::from(sheet.max_hp) * 100))
+        };
+        let leader = remote.body(Seat(0));
+        let me = snapshot.body(seat);
+        let near: Vec<String> = leader
+            .map(|l| l.position)
+            .map(|at| {
+                let mut tags: Vec<(f32, String)> = level
+                    .placed()
+                    .iter()
+                    .filter(|object| !object.tag.is_empty())
+                    .map(|object| {
+                        let d = (object.position[0] - at[0]).hypot(object.position[1] - at[1]);
+                        (d, object.tag.to_ascii_lowercase())
+                    })
+                    .collect();
+                tags.sort_by(|a, b| a.0.total_cmp(&b.0));
+                tags.dedup_by(|a, b| a.1 == b.1);
+                tags.into_iter().take(25).map(|(_, tag)| tag).collect()
+            })
+            .unwrap_or_default();
+        let prompt = format!(
+            "State: leader HP {}%, my HP {}%, hold {}, leading to {:?}. Tags near the leader you may lead to: {}. Advise with a few calls, or {{\"calls\":[]}} if the rules are fine.",
+            share(leader).map_or("?".into(), |p| p.to_string()),
+            share(me).map_or("?".into(), |p| p.to_string()),
+            self.hold,
+            self.lead_tag,
+            near.join(", ")
+        );
+        self.brain_id += 1;
+        if let Some(brain) = &self.brain {
+            brain.submit(self.brain_id, prompt);
+        }
+    }
+
+    /// The question a confirming seat leaves for the human: the replies, the
+    /// seat's recommendation and why, and what may be at stake (a hint from
+    /// the words of the replies; the game does not say what a choice costs).
+    fn write_pending(&self, label: &str, replies: &[String], recommended: usize, why: &str, tick: u64) {
+        let Some(path) = &self.control else {
+            return;
+        };
+        let weighty = ["kill", "destroy", "betray", "join", "swear", "spare", "sacrifice", "surrender", "execute", "leave"];
+        let notes: Vec<serde_json::Value> = replies
+            .iter()
+            .enumerate()
+            .map(|(i, text)| {
+                let lower = text.to_lowercase();
+                let hit: Vec<&str> = weighty.iter().copied().filter(|w| lower.contains(w)).collect();
+                serde_json::json!({
+                    "reply": i + 1,
+                    "text": text,
+                    "may_be_irreversible": !hit.is_empty(),
+                    "because_of_words": hit,
+                })
+            })
+            .collect();
+        let question = serde_json::json!({
+            "for": label,
+            "tick": tick,
+            "recommended": recommended + 1,
+            "why": why,
+            "replies": notes,
+            "note": "Set {\"answer\": N, \"for\": \"<for>\"} (N counts from 1) or {\"answer\": \"recommended\"} in the control file. The flags are a hint from the words only: the game does not say what a choice costs.",
+        });
+        let out = path.with_extension("pending.json");
+        if let Err(error) = std::fs::write(&out, question.to_string()) {
+            info!(target: "ai_seat", "tick {tick} could not write {out:?}: {error}");
+        } else {
+            info!(target: "ai_seat", "tick {tick} waiting for the human's answer to {label} ({out:?})");
+        }
+    }
+
+    /// One JSON line per delegated choice: what was offered, what was
+    /// chosen, by whom and why.
+    fn log_decision(&self, label: &str, replies: &[String], chosen: usize, by: &str, why: &str, tick: u64) {
+        let Some(path) = &self.decisions else {
+            return;
+        };
+        let line = serde_json::json!({
+            "tick": tick,
+            "line": label,
+            "offered": replies,
+            "chosen": chosen + 1,
+            "by": by,
+            "why": why,
+        });
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            use std::io::Write;
+            let _ = writeln!(file, "{line}");
+        }
+    }
+
+    /// (model calls kept, model calls dropped, model errors).
+    pub fn llm_stats(&self) -> (u64, u64, u64) {
+        (self.llm_calls, self.llm_dropped, self.llm_errors)
     }
 
     /// Metres this seat's body has walked (steps under 2 m a tick).
@@ -435,6 +682,8 @@ impl AiSeat {
         tick: u64,
     ) -> Command {
         self.poll_control(tick);
+        self.poll_brain(level, replies, tick);
+        self.advise(level, snapshot, remote, seat, tick);
         let mut command = self.steer(level, snapshot, remote, replies, seat, tick);
         // Someone else walked into an exit: the party goes when everyone is
         // ready, and the partner follows, so it says it is (a seat that never
@@ -462,9 +711,10 @@ impl AiSeat {
             let most = i32::from(sheet.max_hp) * 100;
             if fighter.alive()
                 && most > 0
-                && fighter.hp * 100 < most * self.heal_below
+                && (fighter.hp * 100 < most * self.heal_below || self.force_heal)
                 && tick >= self.healed + HEAL_EVERY_TICKS
             {
+                self.force_heal = false;
                 self.healed = tick;
                 command.buttons |= buttons::MEDPAC;
                 info!(target: "ai_seat", "tick {tick} hurt (hp {:.1} of {:.1}): using a medpac", f64::from(fighter.hp) / 100.0, f64::from(most) / 100.0);
@@ -484,7 +734,9 @@ impl AiSeat {
     ) -> Command {
         // A conversation holds the world until its lines are passed.
         if let Some(talk) = snapshot.talk_for(seat) {
-            // Handed the choices, the seat answers a reply once per line.
+            // Handed the choices, the seat answers a reply once per line:
+            // the human's own answer when confirming, else the model's
+            // (checked) when one is set up, else the seat's rules.
             if let Some(policy) = self.delegate
                 && !talk.replies.is_empty()
                 && !replies.is_empty()
@@ -492,10 +744,60 @@ impl AiSeat {
                 && tick >= self.skipped + SKIP_EVERY_TICKS
                 && let Some((index, why)) = pick_reply(replies, &self.says, policy)
             {
+                let key = (talk.dialog.clone(), talk.entry);
+                let label = format!("{}:{}", key.0, key.1);
+                let mut chosen = (index, "rules".to_string(), why.to_string());
+                if self.confirm {
+                    // The human decides: the question is written once and the
+                    // world waits (it is held by the conversation anyway).
+                    if self.asked_human.as_ref() != Some(&key) {
+                        self.asked_human = Some(key.clone());
+                        self.write_pending(&label, replies, index, &why, tick);
+                    }
+                    match self.human_answer.take() {
+                        Some((for_line, n)) if for_line.as_deref().is_none_or(|f| f == label) => {
+                            let n = if n == usize::MAX { index } else { n };
+                            if n < replies.len() {
+                                chosen = (n, "human".into(), "confirmed by the human".into());
+                            } else {
+                                return Command::default();
+                            }
+                        }
+                        _ => return Command::default(),
+                    }
+                } else if self.brain.is_some() {
+                    match self.brain_pick.take() {
+                        Some((line, n)) if line == key && n < replies.len() => {
+                            chosen = (n, "llm".into(), "the model's pick (checked)".into());
+                        }
+                        other => {
+                            self.brain_pick = other.filter(|(line, _)| *line != key);
+                            let asked = self.brain_wait.as_ref().filter(|(_, line, _)| *line == key);
+                            match asked {
+                                None => {
+                                    let prompt = self.choice_prompt(&talk.dialog, replies, index, policy);
+                                    self.brain_id += 1;
+                                    if let Some(brain) = &self.brain {
+                                        brain.submit(self.brain_id, prompt);
+                                    }
+                                    self.brain_wait = Some((self.brain_id, key.clone(), tick));
+                                    return Command::default();
+                                }
+                                // Waited for up to ~8 s of play, then the rules.
+                                Some((_, _, since)) if tick < since + 1000 => {
+                                    return Command::default();
+                                }
+                                Some(_) => {}
+                            }
+                        }
+                    }
+                }
                 self.skipped = tick;
-                self.answered = Some((talk.dialog.clone(), talk.entry));
-                self.reply = answer(self.reply, Pick::Reply(index as u8));
-                info!(target: "ai_seat", "tick {tick} delegated choice in {} entry {}: reply {} of {} ({why}): {:?}", talk.dialog, talk.entry, index + 1, replies.len(), replies[index]);
+                self.answered = Some(key.clone());
+                self.brain_wait = None;
+                self.reply = answer(self.reply, Pick::Reply(chosen.0 as u8));
+                self.log_decision(&label, replies, chosen.0, &chosen.1, &chosen.2, tick);
+                info!(target: "ai_seat", "tick {tick} delegated choice in {} entry {}: reply {} of {} (by {}: {}): {:?}", talk.dialog, talk.entry, chosen.0 + 1, replies.len(), chosen.1, chosen.2, replies[chosen.0]);
                 return Command {
                     reply: self.reply,
                     ..Command::default()
@@ -530,7 +832,7 @@ impl AiSeat {
         };
         // Solo mode: the companions stand where they are, a guest's body too
         // (the Unknown World's floor tiles answer a follower's step).
-        if remote.solo {
+        if remote.solo || self.hold {
             return Command::default();
         }
         if let Some(last) = self.last {
