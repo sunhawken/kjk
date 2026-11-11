@@ -55,6 +55,14 @@ const FIGHT_FIRST_M: f32 = 5.0;
 /// `HEAL_EVERY_TICKS` (about 6 s of play).
 const HEAL_BELOW_PERCENT: i32 = 40;
 const HEAL_EVERY_TICKS: u64 = 750;
+/// Leading: the seat stops and waits for the human when they are farther
+/// than this many metres behind, and has arrived within `LEAD_ARRIVE_M`.
+const LEAD_WAIT_M: f32 = 18.0;
+const LEAD_ARRIVE_M: f32 = 2.0;
+/// Farther behind than this (metres) the human is not waited for but
+/// gone back to, so the seat never abandons them (and never deadlocks when
+/// the story starts it far away).
+const LEAD_RETURN_M: f32 = 40.0;
 /// Ticks between position reports in the log.
 const REPORT_TICKS: u64 = 50;
 
@@ -159,6 +167,11 @@ pub struct AiSeat {
     fought: u64,
     healed: u64,
     heal_below: i32,
+    /// The tag of the object to lead the human to (`KJK_AI_LEAD_TO`), as a
+    /// route's `to`/`use`/`exit` goal names it.
+    lead_tag: Option<String>,
+    lead_arrived: bool,
+    lead_waiting: bool,
     /// Doors the story opens when used though they start locked (they
     /// have an `OnFailToOpen` script): planned through, as the playthrough
     /// harness does; for the level named here.
@@ -188,6 +201,11 @@ impl AiSeat {
             explained: 0,
             fought: 0,
             healed: 0,
+            lead_tag: std::env::var("KJK_AI_LEAD_TO")
+                .ok()
+                .filter(|tag| !tag.is_empty()),
+            lead_arrived: false,
+            lead_waiting: false,
             // KJK_AI_HEAL_BELOW (percent) overrides the threshold, to try the
             // heal without being hurt.
             heal_below: std::env::var("KJK_AI_HEAL_BELOW")
@@ -283,6 +301,17 @@ impl AiSeat {
             .is_some_and(|fighter| fighter.life == sim::combat::fighter::Life::Downed);
         let enemy = enemy.filter(|(_, d, _)| !leader_down || *d < FIGHT_FIRST_M);
         let reviving = leader_down && enemy.is_none();
+        let flat =
+            |a: [f32; 3], b: [f32; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt();
+        // The object to lead to: the nearest placed object with the tag.
+        let lead_target = self.lead_tag.as_deref().and_then(|tag| {
+            level
+                .placed()
+                .iter()
+                .filter(|object| object.tag.eq_ignore_ascii_case(tag))
+                .map(|object| object.position)
+                .min_by(|a, b| flat(*a, me).total_cmp(&flat(*b, me)))
+        });
         let ranged = mine
             .and_then(|body| body.sheet)
             .is_none_or(|sheet| sheet.main_weapon().delivery.ranged());
@@ -296,6 +325,29 @@ impl AiSeat {
                 },
             ),
             None if reviving => (leader, REVIVE_REACH_M),
+            None if lead_target.is_some() => match lead_target {
+                Some(_) if flat(me, leader) > LEAD_RETURN_M => {
+                    self.lead_waiting = false;
+                    (leader, STAND_WITHIN_M)
+                }
+                Some(target) if flat(me, leader) > LEAD_WAIT_M => {
+                    // The human is too far behind: stand and wait for them.
+                    if !self.lead_waiting {
+                        self.lead_waiting = true;
+                        info!(target: "ai_seat", "tick {tick} leading to {:?}: the leader is {:.1} m behind, waiting (target {:.1} m ahead)", self.lead_tag, flat(me, leader), flat(me, target));
+                    }
+                    (leader, f32::MAX)
+                }
+                Some(target) => {
+                    self.lead_waiting = false;
+                    if flat(me, target) <= LEAD_ARRIVE_M && !self.lead_arrived {
+                        self.lead_arrived = true;
+                        info!(target: "ai_seat", "tick {tick} arrived at {:?} (leader {:.1} m behind)", self.lead_tag, flat(me, leader));
+                    }
+                    (target, LEAD_ARRIVE_M)
+                }
+                None => (leader, STAND_WITHIN_M),
+            },
             None => (leader, STAND_WITHIN_M),
         };
         let distance = ((goal[0] - me[0]).powi(2) + (goal[1] - me[1]).powi(2)).sqrt();
