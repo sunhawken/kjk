@@ -223,7 +223,27 @@ impl AiSeat {
             && tick >= self.fought + REPORT_TICKS
         {
             self.fought = tick;
-            info!(target: "ai_seat", "tick {tick} engaging an enemy {d:.1} m away (hp {:.1}), {mode:?}", f64::from(hp) / 100.0);
+            let fighter = mine.and_then(|body| body.fighter);
+            if let Some(f) = fighter {
+                let events: Vec<String> = f
+                    .events
+                    .iter()
+                    .flatten()
+                    .take(6)
+                    .map(|event| format!("{event:?}"))
+                    .collect();
+                info!(target: "ai_seat", "tick {tick} my events {events:?} next {} saber {:?} shooting {:?} command_seen {:?}", f.next_event, f.saber, f.shooting, f.last_command.buttons);
+            }
+            info!(
+                target: "ai_seat",
+                "tick {tick} engaging an enemy {d:.1} m away (hp {:.1}), {mode:?}; me hp {:?} hand {:?} weapon_wait {:?} ranged {ranged} sheet {} yaw {:.0}",
+                f64::from(hp) / 100.0,
+                fighter.map(|f| f.hp),
+                fighter.map(|f| f.hand),
+                fighter.map(|f| f.weapon_wait_ms),
+                mine.is_some_and(|body| body.sheet.is_some()),
+                yaw_toward(me, goal)
+            );
         }
         if tick >= self.reported + REPORT_TICKS {
             self.reported = tick;
@@ -262,6 +282,22 @@ impl AiSeat {
                 .collect();
             info!(target: "ai_seat", "tick {tick} host snapshot tick {} holds_world {} talks {talks:?}", remote.tick, remote.holds_world());
             info!(target: "ai_seat", "tick {tick} host bodies {who:?} leading {:?}", remote.leading);
+            let crowd: Vec<String> = remote
+                .entities
+                .iter()
+                .filter_map(|e| {
+                    let Kind::Object(ObjectKind::Creature, index) = e.kind else {
+                        return None;
+                    };
+                    let f = e.fighter?;
+                    let d = ((e.position[0] - me[0]).powi(2) + (e.position[1] - me[1]).powi(2)).sqrt();
+                    (d < 25.0).then(|| format!(
+                        "#{} idx{index} hp {} life {:?} tgt {:?} d {d:.1} at ({:.1},{:.1}) hand {} wait {}",
+                        e.id.0, f.hp, f.life, f.target.map(|t| t.0), e.position[0], e.position[1], f.hand, f.weapon_wait_ms
+                    ))
+                })
+                .collect();
+            info!(target: "ai_seat", "tick {tick} crowd {crowd:?} (me #{:?} leader #{:?})", snapshot.body(seat).map(|b| b.id.0), remote.body(Seat(0)).map(|b| b.id.0));
             let mine = snapshot.body(seat);
             let theirs = remote.body(Seat(0));
             info!(
@@ -278,7 +314,20 @@ impl AiSeat {
                 snapshot.leading
             );
         }
-        let angles = view_angles(0.0, yaw_toward(me, goal));
+        // The sim adds the body's `view_offset` (delta angles, set when a
+        // script turned or placed it) to a command's angles, as JA does: to
+        // look at a bearing the command carries it less that offset.
+        let offset = mine
+            .and_then(|body| body.player)
+            .map_or([0i16; 3], |player| player.view_offset);
+        let rebase = |angles: [i16; 3]| {
+            [
+                angles[0].wrapping_sub(offset[0]),
+                angles[1].wrapping_sub(offset[1]),
+                angles[2].wrapping_sub(offset[2]),
+            ]
+        };
+        let angles = rebase(view_angles(0.0, yaw_toward(me, goal)));
         let reply = self.reply;
         // Walk the navigation mesh's route to the leader when the body has
         // a motion state; else straight at it.
@@ -451,7 +500,7 @@ impl AiSeat {
                         .atan2(d.max(0.1))
                         .to_degrees();
                     Command {
-                        angles: view_angles(pitch.clamp(-30.0, 30.0), yaw_toward(me, at)),
+                        angles: rebase(view_angles(pitch.clamp(-30.0, 30.0), yaw_toward(me, at))),
                         buttons: buttons::ATTACK,
                         reply,
                         ..Command::default()
