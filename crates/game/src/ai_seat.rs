@@ -270,6 +270,12 @@ pub struct AiSeat {
     says: Vec<String>,
     /// The conversation line already answered: (dialog, entry).
     answered: Option<(String, u32)>,
+    /// A control file the human (or a chat bridge) edits while playing
+    /// (`KJK_AI_CONTROL`): {"delegate": "off|light|dark|walkthrough",
+    /// "lead_to": "TAG", "say_file": "PATH"}. Read again when it changes.
+    control: Option<std::path::PathBuf>,
+    control_seen: Option<std::time::SystemTime>,
+    control_checked: u64,
     /// Doors the story opens when used though they start locked (they
     /// have an `OnFailToOpen` script): planned through, as the playthrough
     /// harness does; for the level named here.
@@ -320,6 +326,9 @@ impl AiSeat {
                 })
                 .unwrap_or_default(),
             answered: None,
+            control: std::env::var_os("KJK_AI_CONTROL").map(std::path::PathBuf::from),
+            control_seen: None,
+            control_checked: 0,
             // KJK_AI_HEAL_BELOW (percent) overrides the threshold, to try the
             // heal without being hurt.
             heal_below: std::env::var("KJK_AI_HEAL_BELOW")
@@ -330,6 +339,58 @@ impl AiSeat {
             pending: Vec::new(),
             door_acted: BTreeMap::new(),
         }
+    }
+
+    /// Re-read the control file when it changed (checked about once a
+    /// second of play): the human's switches take effect at once.
+    fn poll_control(&mut self, tick: u64) {
+        let Some(path) = self.control.clone() else {
+            return;
+        };
+        if tick < self.control_checked + 125 {
+            return;
+        }
+        self.control_checked = tick;
+        let Ok(modified) = std::fs::metadata(&path).and_then(|meta| meta.modified()) else {
+            return;
+        };
+        if self.control_seen == Some(modified) {
+            return;
+        }
+        self.control_seen = Some(modified);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            info!(target: "ai_seat", "tick {tick} control file {path:?} is not valid JSON; ignored");
+            return;
+        };
+        if let Some(mode) = value.get("delegate").and_then(|mode| mode.as_str()) {
+            self.delegate = match mode {
+                "light" | "walkthrough" => Some(Delegate::Light),
+                "dark" => Some(Delegate::Dark),
+                _ => None,
+            };
+        }
+        if let Some(tag) = value.get("lead_to").and_then(|tag| tag.as_str()) {
+            let tag = Some(tag.to_string()).filter(|tag| !tag.is_empty());
+            if tag != self.lead_tag {
+                self.lead_tag = tag;
+                self.lead_arrived = false;
+                self.lead_waiting = false;
+            }
+        }
+        if let Some(file) = value.get("say_file").and_then(|file| file.as_str()) {
+            self.says = std::fs::read_to_string(file)
+                .map(|text| {
+                    text.lines()
+                        .map(|line| line.trim().to_lowercase())
+                        .filter(|line| !line.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
+        }
+        info!(target: "ai_seat", "tick {tick} control changed: delegate {:?}, lead_to {:?}, {} reply phrases", self.delegate, self.lead_tag, self.says.len());
     }
 
     /// The actions the last `decide` asks to send beside its command.
@@ -350,6 +411,7 @@ impl AiSeat {
         seat: Seat,
         tick: u64,
     ) -> Command {
+        self.poll_control(tick);
         let mut command = self.steer(level, snapshot, remote, replies, seat, tick);
         // Use a medpac when hurt (a press: the sim takes the first it finds).
         let body = snapshot.body(seat);
