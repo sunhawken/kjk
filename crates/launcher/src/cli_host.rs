@@ -33,6 +33,14 @@ pub(crate) struct HostArgs {
     /// for a guest to drive); repeatable
     #[arg(long = "follow")]
     followers: Vec<String>,
+    /// Turn the first module's creatures with this tag hostile before it
+    /// is installed, as `kjk play --hostile` (repeatable)
+    #[arg(long)]
+    hostile: Vec<String>,
+    /// Turn the first module's creatures with this tag to the players'
+    /// side before it is installed (repeatable)
+    #[arg(long)]
+    ally: Vec<String>,
     /// The UDP port players join on
     #[arg(long, default_value_t = net_join::PORT)]
     port: u16,
@@ -191,6 +199,8 @@ pub(crate) fn run(args: HostArgs, size: (u32, u32)) -> ExitCode {
         save: saved.as_ref().map(|(save, _)| save),
         party: ByHandParty {
             followers: &args.followers,
+            hostile: &args.hostile,
+            allies: &args.ally,
             gold: args.gold,
             items: &args.items,
             xp: args.xp,

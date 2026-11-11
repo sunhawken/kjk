@@ -18,11 +18,17 @@ use sim::motion::{SOLE_Z, UNIT};
 use sim::moves::view_angles;
 use sim::script::dialogue::{Pick, answer};
 use sim::walk::Walker;
-use sim::{Command, Seat, Snapshot, buttons};
+use sim::{Command, Seat, SimId, Snapshot, buttons};
 use sim::{Kind, Level, ObjectState, TickRate};
 
 /// Within this many metres of the leader the seat stands.
 const STAND_WITHIN_M: f32 = 2.5;
+/// A creature fighting a party member within this many metres is engaged.
+const ENGAGE_M: f32 = 18.0;
+/// How close (metres) a seat with a gun stands to its enemy, and with a
+/// blade or fists.
+const RANGED_STANDOFF_M: f32 = 7.0;
+const MELEE_STANDOFF_M: f32 = 1.8;
 /// Beyond this many metres it runs; between the two it walks.
 const RUN_BEYOND_M: f32 = 6.0;
 /// JA's client sends 64 instead of 127 on the stick when walking.
@@ -53,8 +59,8 @@ pub enum Gait {
 }
 
 /// The choice for one tick from the metres to the leader: the gait.
-pub fn gait(distance_m: f32) -> Gait {
-    if distance_m <= STAND_WITHIN_M {
+pub fn gait(distance_m: f32, standoff_m: f32) -> Gait {
+    if distance_m <= standoff_m {
         Gait::Stand
     } else if distance_m <= RUN_BEYOND_M {
         Gait::Walk
@@ -66,6 +72,34 @@ pub fn gait(distance_m: f32) -> Gait {
 /// The yaw, degrees from +X (90 is +Y), that faces `to` from `from`.
 pub fn yaw_toward(from: [f32; 3], to: [f32; 3]) -> f32 {
     (to[1] - from[1]).atan2(to[0] - from[0]).to_degrees()
+}
+
+/// The nearest living creature within `ENGAGE_M` of `me` that is fighting one
+/// of the `party` bodies: (its place, the metres to it, its hundredths of
+/// HP). Only those already fighting the party are enemies, so a neutral is
+/// never attacked.
+fn nearest_enemy(
+    remote: &Snapshot,
+    party: [Option<SimId>; 2],
+    me: [f32; 3],
+) -> Option<([f32; 3], f32, i32)> {
+    remote
+        .entities
+        .iter()
+        .filter_map(|entity| {
+            let Kind::Object(ObjectKind::Creature, _) = entity.kind else {
+                return None;
+            };
+            let fighter = entity.fighter.filter(|fighter| fighter.alive())?;
+            let target = fighter.target?;
+            if !party.contains(&Some(target)) {
+                return None;
+            }
+            let d = ((entity.position[0] - me[0]).powi(2) + (entity.position[1] - me[1]).powi(2))
+                .sqrt();
+            (d <= ENGAGE_M).then_some((entity.position, d, fighter.hp))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
 pub struct AiSeat {
@@ -80,6 +114,7 @@ pub struct AiSeat {
     walker: Option<Walker>,
     planned_at: [f32; 3],
     explained: u64,
+    fought: u64,
     /// Doors the story opens when used though they start locked (they
     /// have an `OnFailToOpen` script): planned through, as the playthrough
     /// harness does; for the level named here.
@@ -107,6 +142,7 @@ impl AiSeat {
             walker: None,
             planned_at: [0.0; 3],
             explained: 0,
+            fought: 0,
             tried: (String::new(), BTreeSet::new()),
             pending: Vec::new(),
             door_acted: BTreeMap::new(),
@@ -157,8 +193,38 @@ impl AiSeat {
             }
         }
         self.last = Some(me);
-        let distance = ((leader[0] - me[0]).powi(2) + (leader[1] - me[1]).powi(2)).sqrt();
-        let mode = gait(distance);
+        // Fight what is fighting the party, else follow the leader.
+        let mine = snapshot.body(seat);
+        let enemy = nearest_enemy(
+            remote,
+            [
+                mine.map(|body| body.id),
+                remote.body(Seat(0)).map(|body| body.id),
+            ],
+            me,
+        );
+        let ranged = mine
+            .and_then(|body| body.sheet)
+            .is_none_or(|sheet| sheet.main_weapon().delivery.ranged());
+        let (goal, standoff) = match enemy {
+            Some((at, _, _)) => (
+                at,
+                if ranged {
+                    RANGED_STANDOFF_M
+                } else {
+                    MELEE_STANDOFF_M
+                },
+            ),
+            None => (leader, STAND_WITHIN_M),
+        };
+        let distance = ((goal[0] - me[0]).powi(2) + (goal[1] - me[1]).powi(2)).sqrt();
+        let mode = gait(distance, standoff);
+        if let Some((_, d, hp)) = enemy
+            && tick >= self.fought + REPORT_TICKS
+        {
+            self.fought = tick;
+            info!(target: "ai_seat", "tick {tick} engaging an enemy {d:.1} m away (hp {:.1}), {mode:?}", f64::from(hp) / 100.0);
+        }
         if tick >= self.reported + REPORT_TICKS {
             self.reported = tick;
             let who: Vec<String> = remote
@@ -212,29 +278,29 @@ impl AiSeat {
                 snapshot.leading
             );
         }
-        let angles = view_angles(0.0, yaw_toward(me, leader));
+        let angles = view_angles(0.0, yaw_toward(me, goal));
         let reply = self.reply;
         // Walk the navigation mesh's route to the leader when the body has
         // a motion state; else straight at it.
         if mode != Gait::Stand
             && let Some(player) = snapshot.body(seat).and_then(|body| body.player)
         {
-            let leader_moved = ((leader[0] - self.planned_at[0]).powi(2)
-                + (leader[1] - self.planned_at[1]).powi(2))
+            let leader_moved = ((goal[0] - self.planned_at[0]).powi(2)
+                + (goal[1] - self.planned_at[1]).powi(2))
             .sqrt()
                 > REPLAN_M;
             if self.walker.is_none() || leader_moved {
                 let soles = (player.origin[2] + SOLE_Z) * UNIT;
                 let floor = level
                     .nav()
-                    .and_then(|nav| nav.height([leader[0], leader[1], soles], 50.0, 50.0))
-                    .unwrap_or(leader[2]);
+                    .and_then(|nav| nav.height([goal[0], goal[1], soles], 50.0, 50.0))
+                    .unwrap_or(goal[2]);
                 self.walker = Some(Walker::new([
-                    leader[0] / UNIT,
-                    leader[1] / UNIT,
+                    goal[0] / UNIT,
+                    goal[1] / UNIT,
                     floor / UNIT - SOLE_Z,
                 ]));
-                self.planned_at = leader;
+                self.planned_at = goal;
             }
             if self.tried.0 != level.name() {
                 self.tried = (
@@ -377,11 +443,27 @@ impl AiSeat {
             }
         }
         match mode {
-            Gait::Stand => Command {
-                angles,
-                reply,
-                ..Command::default()
-            },
+            Gait::Stand => {
+                if let Some((at, d, _)) = enemy {
+                    // In range: face it and hold the attack. The pitch
+                    // aims at its chest; positive looks down.
+                    let pitch = -((at[2] + 0.8) - (me[2] + 0.6))
+                        .atan2(d.max(0.1))
+                        .to_degrees();
+                    Command {
+                        angles: view_angles(pitch.clamp(-30.0, 30.0), yaw_toward(me, at)),
+                        buttons: buttons::ATTACK,
+                        reply,
+                        ..Command::default()
+                    }
+                } else {
+                    Command {
+                        angles,
+                        reply,
+                        ..Command::default()
+                    }
+                }
+            }
             Gait::Walk => Command {
                 angles,
                 forward: WALK_AXIS,
