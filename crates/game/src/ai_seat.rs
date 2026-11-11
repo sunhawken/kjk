@@ -12,7 +12,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::prelude::info;
-use sim::module::ObjectKind;
+use sim::action::Action;
+use sim::module::{ObjectKind, Opens};
 use sim::motion::{SOLE_Z, UNIT};
 use sim::moves::view_angles;
 use sim::script::dialogue::{Pick, answer};
@@ -38,6 +39,8 @@ const DOOR_REACH_M: f32 = 2.2;
 /// The use key is pressed for this many of every `USE_PERIOD_TICKS`.
 const USE_HELD_TICKS: u64 = 4;
 const USE_PERIOD_TICKS: u64 = 20;
+/// Ticks between the actions asked of one door (an unlock takes a while).
+const DOOR_ACTION_TICKS: u64 = 60;
 /// Ticks between position reports in the log.
 const REPORT_TICKS: u64 = 50;
 
@@ -81,6 +84,10 @@ pub struct AiSeat {
     /// have an `OnFailToOpen` script): planned through, as the playthrough
     /// harness does; for the level named here.
     tried: (String, BTreeSet<u32>),
+    /// Actions this tick asks of the host (unlock or open a door), taken by
+    /// the caller after `decide` and sent beside the command.
+    pending: Vec<Action>,
+    door_acted: BTreeMap<u32, u64>,
 }
 
 impl Default for AiSeat {
@@ -101,7 +108,14 @@ impl AiSeat {
             planned_at: [0.0; 3],
             explained: 0,
             tried: (String::new(), BTreeSet::new()),
+            pending: Vec::new(),
+            door_acted: BTreeMap::new(),
         }
+    }
+
+    /// The actions the last `decide` asks to send beside its command.
+    pub fn take_actions(&mut self) -> Vec<Action> {
+        std::mem::take(&mut self.pending)
     }
 
     /// The command for `tick` of `seat`, from the snapshot it predicts.
@@ -206,7 +220,11 @@ impl AiSeat {
             if let Some(walker) = self.walker.as_mut() {
                 let mut command = walker.command_eager(level, &player, now_ms, &|index| {
                     let mut state = doors.get(&index).copied().unwrap_or(ObjectState::GONE);
-                    if tried.contains(&index) {
+                    let opens_at_all = level
+                        .placed()
+                        .get(index as usize)
+                        .is_some_and(|object| object.opens != Opens::Never);
+                    if tried.contains(&index) || opens_at_all {
                         state.lock = sim::lock::UNLOCKED;
                     }
                     state
@@ -223,6 +241,49 @@ impl AiSeat {
                 });
                 if door_near && tick % USE_PERIOD_TICKS < USE_HELD_TICKS {
                     command.buttons |= buttons::USE;
+                }
+                // The nearest closed door within reach: unlock it (Security)
+                // if it is locked, else open it, as a player's click does.
+                let closest = snapshot
+                    .entities
+                    .iter()
+                    .filter_map(|entity| match (entity.kind, entity.object) {
+                        (Kind::Object(ObjectKind::Door, index), Some(object))
+                            if object.state == 0 =>
+                        {
+                            let d = ((entity.position[0] - me[0]).powi(2)
+                                + (entity.position[1] - me[1]).powi(2))
+                            .sqrt();
+                            (d < DOOR_REACH_M).then_some((d, index, object))
+                        }
+                        _ => None,
+                    })
+                    .min_by(|a, b| a.0.total_cmp(&b.0));
+                if let Some((_, index, object)) = closest {
+                    let due = self
+                        .door_acted
+                        .get(&index)
+                        .is_none_or(|last| tick >= last + DOOR_ACTION_TICKS);
+                    if due {
+                        self.door_acted.insert(index, tick);
+                        let opens = level
+                            .placed()
+                            .get(index as usize)
+                            .map_or(Opens::Never, |facts| facts.opens);
+                        let action = if object.locked(opens) {
+                            Action::Unlock {
+                                object: index,
+                                spike: None,
+                            }
+                        } else {
+                            Action::Use {
+                                object: index,
+                                verb: sim::action::Verb::Open,
+                            }
+                        };
+                        info!(target: "ai_seat", "tick {tick} door {index}: asking {action:?}");
+                        self.pending.push(action);
+                    }
                 }
                 if command.forward == 0
                     && command.right == 0

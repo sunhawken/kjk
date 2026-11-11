@@ -579,6 +579,11 @@ pub(crate) fn advance(
         (Some(ai), Some(tick)) => Some(ai.decide(&level, own.presented.current(), seat, tick)),
         _ => None,
     };
+    let ai_actions = joined
+        .ai
+        .as_mut()
+        .map(|ai| ai.take_actions())
+        .unwrap_or_default();
     let command = match (&joined.driver, &actions, next_tick) {
         _ if ai_command.is_some() => ai_command.unwrap_or_default(),
         (Driver::Player(Some(script)), _, Some(tick)) => {
@@ -597,6 +602,9 @@ pub(crate) fn advance(
     };
     // The frame predicts with the client locked: the net thread waits.
     let mut client = lock(&joined.joining.client);
+    for action in ai_actions {
+        client.act(action);
+    }
     let span = info_span!("net.frame").entered();
     let frame = client.frame(now, command);
     drop(span);
