@@ -367,8 +367,10 @@ impl AiSeat {
                 .entities
                 .iter()
                 .filter_map(|e| {
-                    let Kind::Object(ObjectKind::Creature, index) = e.kind else {
-                        return None;
+                    let index = match e.kind {
+                        Kind::Object(ObjectKind::Creature, index) => index,
+                        Kind::Avatar(_) => 9999,
+                        _ => return None,
                     };
                     let f = e.fighter?;
                     let d = ((e.position[0] - me[0]).powi(2) + (e.position[1] - me[1]).powi(2)).sqrt();
