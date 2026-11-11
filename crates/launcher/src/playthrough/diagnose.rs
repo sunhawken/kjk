@@ -42,7 +42,7 @@ pub(super) fn diagnose(
                         d,
                         entity
                             .fighter
-                            .map_or(String::new(), |f| format!(", {:?} hp {}", f.life, f.hp / 100))
+                            .map_or(String::new(), |f| format!(", {:?} hp {}, faction {:?}, target {:?}, in a fight to {} ms (now {} ms)", f.life, f.hp / 100, f.faction, f.target, f.combat_until, snapshot.time_ms))
                     ),
                 )
             })

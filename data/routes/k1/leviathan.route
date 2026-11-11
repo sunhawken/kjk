@@ -45,7 +45,7 @@ to lev40_candship        # Canderous calls from the hangar (heard out
 talk                     # before the lift's own talk)
 say bridge
 use plev_elevctrl
-talk
+pick 2                   # K1CP's lift menu lists Cell Block first (reply 1): the bridge is reply 2
 module lev_m40ab         # the command deck
 save lev_bridge_deck
 fight 25
