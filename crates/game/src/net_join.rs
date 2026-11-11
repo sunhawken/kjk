@@ -576,7 +576,13 @@ pub(crate) fn advance(
     let seat = joined.joining.seat;
     let level = joined.level.clone();
     let ai_command = match (joined.ai.as_mut(), next_tick) {
-        (Some(ai), Some(tick)) => Some(ai.decide(&level, own.presented.current(), seat, tick)),
+        (Some(ai), Some(tick)) => Some(ai.decide(
+            &level,
+            own.presented.current(),
+            presented.0.current(),
+            seat,
+            tick,
+        )),
         _ => None,
     };
     let ai_actions = joined

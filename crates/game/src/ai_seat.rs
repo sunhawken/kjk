@@ -118,8 +118,18 @@ impl AiSeat {
         std::mem::take(&mut self.pending)
     }
 
-    /// The command for `tick` of `seat`, from the snapshot it predicts.
-    pub fn decide(&mut self, level: &Level, snapshot: &Snapshot, seat: Seat, tick: u64) -> Command {
+    /// The command for `tick` of `seat`. `snapshot` is the one this client
+    /// predicts (its own seat's body, ahead of the host); `remote` is the
+    /// host's latest, where the other seats really are (a prediction leaves
+    /// them standing, since it has none of their commands).
+    pub fn decide(
+        &mut self,
+        level: &Level,
+        snapshot: &Snapshot,
+        remote: &Snapshot,
+        seat: Seat,
+        tick: u64,
+    ) -> Command {
         // A conversation holds the world until its lines are passed.
         if snapshot.talk_for(seat).is_some() {
             if tick >= self.skipped + SKIP_EVERY_TICKS {
@@ -133,7 +143,7 @@ impl AiSeat {
             };
         }
         let me = snapshot.body(seat).map(|body| body.position);
-        let leader = snapshot.body(Seat(0)).map(|body| body.position);
+        let leader = remote.body(Seat(0)).map(|body| body.position);
         let (Some(me), Some(leader)) = (me, leader) else {
             // No body (it watches) or no one to follow: stand.
             return Command::default();
@@ -151,8 +161,43 @@ impl AiSeat {
         let mode = gait(distance);
         if tick >= self.reported + REPORT_TICKS {
             self.reported = tick;
+            let who: Vec<String> = remote
+                .entities
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        e.kind,
+                        Kind::Avatar(_) | Kind::Object(ObjectKind::Creature, _)
+                    )
+                })
+                .take(8)
+                .map(|e| {
+                    format!(
+                        "{:?}:{:?}@({:.1},{:.1})",
+                        e.id.0, e.kind, e.position[0], e.position[1]
+                    )
+                })
+                .collect();
+            let talks: Vec<String> = remote
+                .talk
+                .conversations
+                .iter()
+                .map(|c| {
+                    format!(
+                        "{} entry {} replies {} party {} pc {:?} speaker {:?}",
+                        c.dialog,
+                        c.entry,
+                        c.replies.len(),
+                        c.party,
+                        c.pc,
+                        c.speaker
+                    )
+                })
+                .collect();
+            info!(target: "ai_seat", "tick {tick} host snapshot tick {} holds_world {} talks {talks:?}", remote.tick, remote.holds_world());
+            info!(target: "ai_seat", "tick {tick} host bodies {who:?} leading {:?}", remote.leading);
             let mine = snapshot.body(seat);
-            let theirs = snapshot.body(Seat(0));
+            let theirs = remote.body(Seat(0));
             info!(
                 target: "ai_seat",
                 "tick {tick} seat {} body {:?} {:?} at ({:.2}, {:.2}, {:.2}) vel {:?} leader body {:?} ({:.2}, {:.2}) distance {distance:.2} m gait {mode:?} travelled {:.2} m world_held {} leading {:?}",
