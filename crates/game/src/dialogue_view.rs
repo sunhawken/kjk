@@ -162,11 +162,12 @@ impl Plugin for DialogueViewPlugin {
     fn build(&self, app: &mut App) {
         let in_play = resource_exists::<PresentedSnapshot>;
         app.init_resource::<ReplyInput>()
+            .init_resource::<HumanDelegate>()
             .init_resource::<Watching>()
             .init_resource::<Called>()
             .add_systems(
                 Update,
-                (answer, requests_keys, show)
+                (answer, delegate_answer, requests_keys, show)
                     .chain()
                     .run_if(in_play)
                     .before(crate::ui_view::Stepped),
@@ -768,6 +769,205 @@ fn marks(
         .collect();
     screen.marks = Some((now, names.clone()));
     names
+}
+
+
+/// The human's conversations, handed to the partner: set by
+/// `KJK_AI_DELEGATE` (light | dark | walkthrough) and `KJK_AI_SAY_FILE`, and
+/// switched while playing through the control file `KJK_AI_CONTROL`
+/// (`{"delegate": "off|light|dark|walkthrough", "confirm": true}`), read
+/// again about once a second. With `confirm` the partner only highlights the
+/// reply it recommends (and leaves its reasons beside the control file) and
+/// the human confirms as ever; without it the partner answers.
+#[derive(Resource)]
+pub(crate) struct HumanDelegate {
+    policy: Option<crate::ai_seat::Delegate>,
+    confirm: bool,
+    says: Vec<String>,
+    control: Option<std::path::PathBuf>,
+    seen: Option<std::time::SystemTime>,
+    checked: Option<std::time::Instant>,
+    /// The line answered, and the line a question was left for.
+    done: Option<(String, u32)>,
+    asked: Option<(String, u32)>,
+    decisions: Option<std::path::PathBuf>,
+    /// The human's answer left in the control file: (for, zero-based or MAX = the recommendation).
+    answer: Option<(Option<String>, usize)>,
+}
+
+fn delegate_policy(word: &str) -> Option<crate::ai_seat::Delegate> {
+    match word {
+        "light" | "walkthrough" => Some(crate::ai_seat::Delegate::Light),
+        "dark" => Some(crate::ai_seat::Delegate::Dark),
+        _ => None,
+    }
+}
+
+fn say_lines(file: &str) -> Vec<String> {
+    std::fs::read_to_string(file)
+        .map(|text| {
+            text.lines()
+                .map(|line| line.trim().to_lowercase())
+                .filter(|line| !line.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+impl Default for HumanDelegate {
+    fn default() -> Self {
+        HumanDelegate {
+            policy: std::env::var("KJK_AI_DELEGATE").ok().and_then(|word| delegate_policy(&word)),
+            confirm: std::env::var_os("KJK_AI_CONFIRM").is_some(),
+            says: std::env::var("KJK_AI_SAY_FILE").map(|file| say_lines(&file)).unwrap_or_default(),
+            control: std::env::var_os("KJK_AI_CONTROL").map(std::path::PathBuf::from),
+            seen: None,
+            checked: None,
+            done: None,
+            asked: None,
+            decisions: std::env::var_os("KJK_AI_DECISIONS").map(std::path::PathBuf::from),
+            answer: None,
+        }
+    }
+}
+
+impl HumanDelegate {
+    /// The control file again when it changed (looked at once a second).
+    fn refresh(&mut self) {
+        let Some(path) = self.control.clone() else {
+            return;
+        };
+        if self.checked.is_some_and(|at| at.elapsed().as_millis() < 1000) {
+            return;
+        }
+        self.checked = Some(std::time::Instant::now());
+        let Ok(modified) = std::fs::metadata(&path).and_then(|meta| meta.modified()) else {
+            return;
+        };
+        if self.seen == Some(modified) {
+            return;
+        }
+        self.seen = Some(modified);
+        let Ok(value) = std::fs::read_to_string(&path)
+            .map_err(|_| ())
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).map_err(|_| ()))
+        else {
+            return;
+        };
+        if let Some(word) = value.get("delegate").and_then(|v| v.as_str()) {
+            self.policy = delegate_policy(word);
+        }
+        if let Some(confirm) = value.get("confirm").and_then(|v| v.as_bool()) {
+            self.confirm = confirm;
+        }
+        if let Some(file) = value.get("say_file").and_then(|v| v.as_str()) {
+            self.says = say_lines(file);
+        }
+        let for_line = value.get("for").and_then(|v| v.as_str()).map(str::to_string);
+        self.answer = match value.get("answer") {
+            Some(v) if v.as_u64().is_some_and(|n| n >= 1) => v.as_u64().map(|n| (for_line, n as usize - 1)),
+            Some(v) if v.as_str() == Some("recommended") => Some((for_line, usize::MAX)),
+            _ => None,
+        };
+    }
+}
+
+/// The replies of `talk` as plain words, unnumbered (what the partner reads).
+fn plain_replies(screen: &Screen, talk: &Conversation, swap: &SceneSwap, fill: Fill) -> Vec<String> {
+    let Some(dlg) = swap
+        .level
+        .scripts()
+        .and_then(|library| library.dialogue(&talk.dialog))
+    else {
+        return Vec::new();
+    };
+    let tlk = screen.tlk.as_deref();
+    let tlk = |strref| tlk?.text(strref).map(<[u8]>::to_vec);
+    talk.replies
+        .iter()
+        .map(|reply| {
+            dlg.replies
+                .get(*reply as usize)
+                .map(|node| {
+                    let text = String::from_utf8_lossy(&node_text(node, &tlk, fill)).into_owned();
+                    text.split(" [Left-click").next().unwrap_or("").to_string()
+                })
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// A conversation the human handed over: the partner answers it (or, asked
+/// to confirm, only highlights what it would answer).
+fn delegate_answer(
+    presented: Res<PresentedSnapshot>,
+    (own, swap, screen): (Option<Res<OwnSeat>>, Option<Res<SceneSwap>>, Option<Res<Screen>>),
+    watching: Res<Watching>,
+    mut input: ResMut<ReplyInput>,
+    mut delegate: ResMut<HumanDelegate>,
+) {
+    delegate.refresh();
+    let (Some(own), Some(swap), Some(screen)) = (own, swap, screen) else {
+        return;
+    };
+    let Some(policy) = delegate.policy else {
+        return;
+    };
+    let snapshot = presented.0.current();
+    let Some(talk) = shown(snapshot, own.0, watching.0) else {
+        return;
+    };
+    if !answering(talk) || computer(&swap, talk) || input.pick.is_some() {
+        return;
+    }
+    let line = (talk.id, talk.shown_ms);
+    let key = (talk.dialog.clone(), talk.entry);
+    if input.answered == Some(line) || delegate.done.as_ref() == Some(&key) {
+        return;
+    }
+    let texts = plain_replies(&screen, talk, &swap, Fill::to(snapshot, talk.pc));
+    let Some((index, why)) = crate::ai_seat::pick_reply(&texts, &delegate.says, policy) else {
+        return;
+    };
+    // A reply the host alone takes is the human's to suggest.
+    if input.host_only(talk).get(index).copied().unwrap_or(false) {
+        return;
+    }
+    let label = format!("{}:{}", key.0, key.1);
+    let tick = snapshot.tick;
+    if delegate.confirm {
+        // The human's own word in the control file settles it.
+        if let Some((for_line, n)) = delegate.answer.clone()
+            && for_line.as_deref().is_none_or(|f| f == label)
+        {
+            let n = if n == usize::MAX { index } else { n };
+            if n < texts.len() && !input.host_only(talk).get(n).copied().unwrap_or(false) {
+                input.pick = Some(Pick::Reply(n as u8));
+                input.answered = Some(line);
+                if let Some(path) = &delegate.decisions {
+                    crate::ai_seat::append_decision(path, &label, &texts, n, "human (confirmed)", &why, u64::from(tick));
+                }
+                delegate.answer = None;
+                delegate.done = Some(key);
+                return;
+            }
+        }
+        input.focus = index as u8;
+        if delegate.asked.as_ref() != Some(&key) {
+            if let Some(path) = &delegate.control {
+                crate::ai_seat::write_pending_file(path, &label, &texts, index, &why, u64::from(tick));
+            }
+            delegate.asked = Some(key);
+        }
+        return;
+    }
+    input.pick = Some(Pick::Reply(index as u8));
+    input.answered = Some(line);
+    if let Some(path) = &delegate.decisions {
+        crate::ai_seat::append_decision(path, &label, &texts, index, "partner (handed over)", &why, u64::from(tick));
+    }
+    info!(target: "ai_seat", "tick {tick} the partner answers {label}: reply {} of {} ({why})", index + 1, texts.len());
+    delegate.done = Some(key);
 }
 
 /// The player's input to the screen (see the module's docs): the pointer

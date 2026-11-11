@@ -599,57 +599,16 @@ impl AiSeat {
     /// seat's recommendation and why, and what may be at stake (a hint from
     /// the words of the replies; the game does not say what a choice costs).
     fn write_pending(&self, label: &str, replies: &[String], recommended: usize, why: &str, tick: u64) {
-        let Some(path) = &self.control else {
-            return;
-        };
-        let weighty = ["kill", "destroy", "betray", "join", "swear", "spare", "sacrifice", "surrender", "execute", "leave"];
-        let notes: Vec<serde_json::Value> = replies
-            .iter()
-            .enumerate()
-            .map(|(i, text)| {
-                let lower = text.to_lowercase();
-                let hit: Vec<&str> = weighty.iter().copied().filter(|w| lower.contains(w)).collect();
-                serde_json::json!({
-                    "reply": i + 1,
-                    "text": text,
-                    "may_be_irreversible": !hit.is_empty(),
-                    "because_of_words": hit,
-                })
-            })
-            .collect();
-        let question = serde_json::json!({
-            "for": label,
-            "tick": tick,
-            "recommended": recommended + 1,
-            "why": why,
-            "replies": notes,
-            "note": "Set {\"answer\": N, \"for\": \"<for>\"} (N counts from 1) or {\"answer\": \"recommended\"} in the control file. The flags are a hint from the words only: the game does not say what a choice costs.",
-        });
-        let out = path.with_extension("pending.json");
-        if let Err(error) = std::fs::write(&out, question.to_string()) {
-            info!(target: "ai_seat", "tick {tick} could not write {out:?}: {error}");
-        } else {
-            info!(target: "ai_seat", "tick {tick} waiting for the human's answer to {label} ({out:?})");
+        if let Some(path) = &self.control {
+            write_pending_file(path, label, replies, recommended, why, tick);
         }
     }
 
     /// One JSON line per delegated choice: what was offered, what was
     /// chosen, by whom and why.
     fn log_decision(&self, label: &str, replies: &[String], chosen: usize, by: &str, why: &str, tick: u64) {
-        let Some(path) = &self.decisions else {
-            return;
-        };
-        let line = serde_json::json!({
-            "tick": tick,
-            "line": label,
-            "offered": replies,
-            "chosen": chosen + 1,
-            "by": by,
-            "why": why,
-        });
-        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-            use std::io::Write;
-            let _ = writeln!(file, "{line}");
+        if let Some(path) = &self.decisions {
+            append_decision(path, label, replies, chosen, by, why, tick);
         }
     }
 
@@ -1252,4 +1211,55 @@ impl AiSeat {
             },
         }
     }
+}
+
+/// The question a confirming partner leaves for the human beside the
+/// control file (`<control>.pending.json`): the replies, the recommendation
+/// and why, and what may be at stake (a hint from the words only).
+pub fn write_pending_file(path: &std::path::Path, label: &str, replies: &[String], recommended: usize, why: &str, tick: u64) {
+        let weighty = ["kill", "destroy", "betray", "join", "swear", "spare", "sacrifice", "surrender", "execute", "leave"];
+        let notes: Vec<serde_json::Value> = replies
+            .iter()
+            .enumerate()
+            .map(|(i, text)| {
+                let lower = text.to_lowercase();
+                let hit: Vec<&str> = weighty.iter().copied().filter(|w| lower.contains(w)).collect();
+                serde_json::json!({
+                    "reply": i + 1,
+                    "text": text,
+                    "may_be_irreversible": !hit.is_empty(),
+                    "because_of_words": hit,
+                })
+            })
+            .collect();
+        let question = serde_json::json!({
+            "for": label,
+            "tick": tick,
+            "recommended": recommended + 1,
+            "why": why,
+            "replies": notes,
+            "note": "Set {\"answer\": N, \"for\": \"<for>\"} (N counts from 1) or {\"answer\": \"recommended\"} in the control file. The flags are a hint from the words only: the game does not say what a choice costs.",
+        });
+        let out = path.with_extension("pending.json");
+        if let Err(error) = std::fs::write(&out, question.to_string()) {
+            info!(target: "ai_seat", "tick {tick} could not write {out:?}: {error}");
+        } else {
+            info!(target: "ai_seat", "tick {tick} waiting for the human's answer to {label} ({out:?})");
+        }
+}
+
+/// One JSON line per delegated choice (`KJK_AI_DECISIONS`).
+pub fn append_decision(path: &std::path::Path, label: &str, replies: &[String], chosen: usize, by: &str, why: &str, tick: u64) {
+        let line = serde_json::json!({
+            "tick": tick,
+            "line": label,
+            "offered": replies,
+            "chosen": chosen + 1,
+            "by": by,
+            "why": why,
+        });
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            use std::io::Write;
+            let _ = writeln!(file, "{line}");
+        }
 }
