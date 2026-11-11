@@ -231,6 +231,41 @@ impl AiSeat {
                     self.explained = tick;
                     let why = sim::walk::why_none(level, player.origin, walker.goal);
                     info!(target: "ai_seat", "tick {tick} the walker stands still: {why} (from {:?} to {:?} units)", player.origin, walker.goal);
+                    // Is a door the only thing in the way? Plan with every
+                    // door open, and list the nearest doors as they stand.
+                    let open = ObjectState {
+                        state: 1,
+                        ..ObjectState::default()
+                    };
+                    let all_open = sim::walk::route(level, player.origin, walker.goal, &|_| open);
+                    info!(
+                        target: "ai_seat",
+                        "with every door open a route {} ({} corners)",
+                        if all_open.is_some() { "EXISTS" } else { "does not exist" },
+                        all_open.as_ref().map_or(0, Vec::len)
+                    );
+                    let mut near: Vec<(f32, u32, ObjectState)> = snapshot
+                        .entities
+                        .iter()
+                        .filter_map(|entity| match (entity.kind, entity.object) {
+                            (Kind::Object(ObjectKind::Door, index), Some(object)) => Some((
+                                ((entity.position[0] - me[0]).powi(2)
+                                    + (entity.position[1] - me[1]).powi(2))
+                                .sqrt(),
+                                index,
+                                object,
+                            )),
+                            _ => None,
+                        })
+                        .collect();
+                    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    for (distance, index, object) in near.iter().take(4) {
+                        info!(
+                            target: "ai_seat",
+                            "door {index} {distance:.1} m: state {} lock {} tried {}",
+                            object.state, object.lock, tried.contains(index)
+                        );
+                    }
                 }
                 return command;
             }
