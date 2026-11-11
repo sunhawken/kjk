@@ -47,6 +47,14 @@ const USE_HELD_TICKS: u64 = 4;
 const USE_PERIOD_TICKS: u64 = 20;
 /// Ticks between the actions asked of one door (an unlock takes a while).
 const DOOR_ACTION_TICKS: u64 = 60;
+/// A downed leader is revived from within this many metres.
+const REVIVE_REACH_M: f32 = 1.4;
+/// An enemy this close (metres) is fought before a downed leader is revived.
+const FIGHT_FIRST_M: f32 = 5.0;
+/// Below this share of its HP the seat uses a medpac, at most once in
+/// `HEAL_EVERY_TICKS` (about 6 s of play).
+const HEAL_BELOW_PERCENT: i32 = 40;
+const HEAL_EVERY_TICKS: u64 = 750;
 /// Ticks between position reports in the log.
 const REPORT_TICKS: u64 = 50;
 
@@ -149,6 +157,8 @@ pub struct AiSeat {
     planned_at: [f32; 3],
     explained: u64,
     fought: u64,
+    healed: u64,
+    heal_below: i32,
     /// Doors the story opens when used though they start locked (they
     /// have an `OnFailToOpen` script): planned through, as the playthrough
     /// harness does; for the level named here.
@@ -177,6 +187,13 @@ impl AiSeat {
             planned_at: [0.0; 3],
             explained: 0,
             fought: 0,
+            healed: 0,
+            // KJK_AI_HEAL_BELOW (percent) overrides the threshold, to try the
+            // heal without being hurt.
+            heal_below: std::env::var("KJK_AI_HEAL_BELOW")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(HEAL_BELOW_PERCENT),
             tried: (String::new(), BTreeSet::new()),
             pending: Vec::new(),
             door_acted: BTreeMap::new(),
@@ -193,6 +210,34 @@ impl AiSeat {
     /// host's latest, where the other seats really are (a prediction leaves
     /// them standing, since it has none of their commands).
     pub fn decide(
+        &mut self,
+        level: &Level,
+        snapshot: &Snapshot,
+        remote: &Snapshot,
+        seat: Seat,
+        tick: u64,
+    ) -> Command {
+        let mut command = self.steer(level, snapshot, remote, seat, tick);
+        // Use a medpac when hurt (a press: the sim takes the first it finds).
+        let body = snapshot.body(seat);
+        if let (Some(fighter), Some(sheet)) =
+            (body.and_then(|b| b.fighter), body.and_then(|b| b.sheet))
+        {
+            let most = i32::from(sheet.max_hp) * 100;
+            if fighter.alive()
+                && most > 0
+                && fighter.hp * 100 < most * self.heal_below
+                && tick >= self.healed + HEAL_EVERY_TICKS
+            {
+                self.healed = tick;
+                command.buttons |= buttons::MEDPAC;
+                info!(target: "ai_seat", "tick {tick} hurt (hp {:.1} of {:.1}): using a medpac", f64::from(fighter.hp) / 100.0, f64::from(most) / 100.0);
+            }
+        }
+        command
+    }
+
+    fn steer(
         &mut self,
         level: &Level,
         snapshot: &Snapshot,
@@ -230,6 +275,14 @@ impl AiSeat {
         // Fight what is fighting the party, else follow the leader.
         let mine = snapshot.body(seat);
         let enemy = nearest_enemy(level, remote, mine, remote.body(Seat(0)), me);
+        // A downed leader is revived (use held, facing it) unless an enemy is
+        // close; that fight comes first.
+        let leader_down = remote
+            .body(Seat(0))
+            .and_then(|body| body.fighter)
+            .is_some_and(|fighter| fighter.life == sim::combat::fighter::Life::Downed);
+        let enemy = enemy.filter(|(_, d, _)| !leader_down || *d < FIGHT_FIRST_M);
+        let reviving = leader_down && enemy.is_none();
         let ranged = mine
             .and_then(|body| body.sheet)
             .is_none_or(|sheet| sheet.main_weapon().delivery.ranged());
@@ -242,6 +295,7 @@ impl AiSeat {
                     MELEE_STANDOFF_M
                 },
             ),
+            None if reviving => (leader, REVIVE_REACH_M),
             None => (leader, STAND_WITHIN_M),
         };
         let distance = ((goal[0] - me[0]).powi(2) + (goal[1] - me[1]).powi(2)).sqrt();
@@ -259,7 +313,7 @@ impl AiSeat {
                     .take(6)
                     .map(|event| format!("{event:?}"))
                     .collect();
-                info!(target: "ai_seat", "tick {tick} my events {events:?} next {} saber {:?} shooting {:?} command_seen {:?}", f.next_event, f.saber, f.shooting, f.last_command.buttons);
+                info!(target: "ai_seat", "tick {tick} my events {events:?} next {} command_seen {:?} pack used {:?} last {:?} using {:?}", f.next_event, f.last_command.buttons, f.pack.used, f.pack.last, f.pack.using);
             }
             info!(
                 target: "ai_seat",
@@ -536,6 +590,7 @@ impl AiSeat {
                     Command {
                         angles,
                         reply,
+                        buttons: if reviving { buttons::USE_HELD } else { 0 },
                         ..Command::default()
                     }
                 }
