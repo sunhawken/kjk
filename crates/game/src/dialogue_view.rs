@@ -793,6 +793,11 @@ pub(crate) struct HumanDelegate {
     decisions: Option<std::path::PathBuf>,
     /// The human's answer left in the control file: (for, zero-based or MAX = the recommendation).
     answer: Option<(Option<String>, usize)>,
+    /// The language model that may choose (`ai_brain`), the line it was asked
+    /// about (and when), and its checked pick.
+    brain: Option<crate::ai_brain::Llm>,
+    brain_wait: Option<((String, u32), std::time::Instant)>,
+    brain_pick: Option<((String, u32), usize)>,
 }
 
 fn delegate_policy(word: &str) -> Option<crate::ai_seat::Delegate> {
@@ -827,6 +832,9 @@ impl Default for HumanDelegate {
             asked: None,
             decisions: std::env::var_os("KJK_AI_DECISIONS").map(std::path::PathBuf::from),
             answer: None,
+            brain: crate::ai_brain::Llm::from_env(),
+            brain_wait: None,
+            brain_pick: None,
         }
     }
 }
@@ -961,10 +969,54 @@ fn delegate_answer(
         }
         return;
     }
+    // The model, when one is set up, chooses among the replies (its call
+    // checked); waited for up to 8 s, else the rules answer.
+    let (mut index, mut by, mut why) = (index, "partner (handed over)".to_string(), why);
+    if delegate.brain.is_some() {
+        while let Some(answer) = delegate.brain.as_ref().and_then(|brain| brain.poll()) {
+            let legal = crate::ai_brain::Legal { replies: texts.len(), ..Default::default() };
+            if let Ok(text) = answer.text {
+                let (tools, _) = crate::ai_brain::validate(&text, &legal);
+                for tool in tools {
+                    if let (crate::ai_brain::Tool::Pick(n), Some((line, _))) = (tool, delegate.brain_wait.clone()) {
+                        delegate.brain_pick = Some((line, n));
+                    }
+                }
+            }
+        }
+        match delegate.brain_pick.take() {
+            Some((line, n)) if line == key && n < texts.len() && !input.host_only(talk).get(n).copied().unwrap_or(false) => {
+                index = n;
+                by = "partner (language model, checked)".into();
+                why = "the model's pick".into();
+            }
+            other => {
+                delegate.brain_pick = other.filter(|(line, _)| *line != key);
+                match delegate.brain_wait.clone().filter(|(line, _)| *line == key) {
+                    None => {
+                        let list: Vec<String> = texts.iter().enumerate().map(|(i, t)| format!("{}. {t}", i + 1)).collect();
+                        let side = if matches!(policy, crate::ai_seat::Delegate::Dark) { "the dark side" } else { "the light side / the walkthrough's way" };
+                        let prompt = format!(
+                            "The human handed this conversation choice ({}) to you; favour {side}. The rules would pick {}. Offered replies:\n{}\nAnswer with one pick call.",
+                            key.0, index + 1, list.join("\n")
+                        );
+                        if let Some(brain) = &delegate.brain {
+                            brain.submit(1, prompt);
+                        }
+                        delegate.brain_wait = Some((key, std::time::Instant::now()));
+                        return;
+                    }
+                    Some((_, since)) if since.elapsed().as_secs() < 8 => return,
+                    Some(_) => {}
+                }
+            }
+        }
+        delegate.brain_wait = None;
+    }
     input.pick = Some(Pick::Reply(index as u8));
     input.answered = Some(line);
     if let Some(path) = &delegate.decisions {
-        crate::ai_seat::append_decision(path, &label, &texts, index, "partner (handed over)", &why, u64::from(tick));
+        crate::ai_seat::append_decision(path, &label, &texts, index, &by, &why, u64::from(tick));
     }
     info!(target: "ai_seat", "tick {tick} the partner answers {label}: reply {} of {} ({why})", index + 1, texts.len());
     delegate.done = Some(key);
