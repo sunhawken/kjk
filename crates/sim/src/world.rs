@@ -835,6 +835,23 @@ impl SimWorld {
         Ok(())
     }
 
+    /// `count` of an item of `template` put into the party's inventory (a
+    /// test aid for routes: the party starts with none of some).
+    pub fn give_party_item(&mut self, template: &str, count: u16) -> Result<(), String> {
+        let library = self
+            .level()
+            .scripts()
+            .cloned()
+            .ok_or("the level has no scripts")?;
+        let mut state = self.script_state().clone();
+        state
+            .item_facts(library.items(), template)
+            .ok_or(format!("{template}: no such item template"))?;
+        state.make_item(library.items(), template, crate::inventory::PARTY, count, None);
+        self.set_script_state(state);
+        Ok(())
+    }
+
     /// Seat `seat`'s player wears an item of `template` in `slot`, made for
     /// it, its sheet dressed by it (a start by hand: the arena's Jedi's
     /// saber). Refused for a seat with no character here or a template the

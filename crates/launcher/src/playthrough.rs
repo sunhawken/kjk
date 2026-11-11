@@ -747,10 +747,16 @@ pub fn run(discovery: &Discovery, options: &Options) -> ExitCode {
                     world.set_player_skill(*row, *rank);
                     met = true;
                 }
+                if let Goal::Give(template, count) = goal {
+                    match world.give_party_item(template, *count) {
+                        Ok(()) => met = true,
+                        Err(why) => eprintln!("give {template}: {why}"),
+                    }
+                }
                 // What a route sets by hand no input makes, so no replay
                 // reaches it: the recording so far is kept beside, and one
                 // starts from here.
-                if matches!(goal, Goal::Global(..) | Goal::Gold(_) | Goal::Skill(..)) {
+                if matches!(goal, Goal::Global(..) | Goal::Gold(_) | Goal::Skill(..) | Goal::Give(..)) {
                     let fresh =
                         sim::Recorder::new(rate.hz(), world.snapshot(), world.level().id(), 100)
                             .with_script(world.script_state().clone());
@@ -1139,6 +1145,7 @@ pub fn run(discovery: &Discovery, options: &Options) -> ExitCode {
                         | Goal::Save(_)
                         | Goal::Global(..)
                         | Goal::Gold(_)
+                        | Goal::Give(..)
                         | Goal::Skill(..)
                         | Goal::Goto(..) => {}
                         // Picked once what the map's use plays out (its

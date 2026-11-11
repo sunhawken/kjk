@@ -109,6 +109,7 @@ pub(super) struct Watch {
     /// Medical packs the party carries at the first step and the last seen.
     medpacs_first: Option<u32>,
     medpacs_last: u32,
+    medpacs_peak: u32,
     carried: Vec<String>,
     /// The lowest share (percent) of its HP the partner's body fell to.
     ai_hp_min: i32,
@@ -134,6 +135,7 @@ impl Watch {
             ai_medpac_presses: 0,
             medpacs_first: None,
             medpacs_last: 0,
+            medpacs_peak: 0,
             carried: Vec::new(),
             ai_hp_min: i32::MAX,
             story: Vec::new(),
@@ -168,7 +170,7 @@ impl Watch {
                 let packs: u32 = last
                     .goods
                     .carried(sim::inventory::PARTY)
-                    .filter(|(_, item)| item.template.to_ascii_lowercase().starts_with("g_i_medeqpt"))
+                    .filter(|(_, item)| item.template.to_ascii_lowercase().starts_with("g_i_medeqpmnt"))
                     .map(|(_, item)| u32::from(item.stack))
                     .sum();
                 if self.ai_step % 500 == 1 {
@@ -180,6 +182,7 @@ impl Watch {
                 }
                 self.medpacs_first.get_or_insert(packs);
                 self.medpacs_last = packs;
+                self.medpacs_peak = self.medpacs_peak.max(packs);
                 if let Some(body) = last.body(Seat(1))
                     && let (Some(fighter), Some(sheet)) = (body.fighter, body.sheet)
                     && sheet.max_hp > 0
@@ -220,6 +223,7 @@ impl Watch {
                 "medpac_presses": self.ai_medpac_presses,
                 "medpacs_at_first_step": self.medpacs_first,
                 "medpacs_at_last_step": self.medpacs_last,
+                "medpacs_most_carried": self.medpacs_peak,
                 "carried_items": self.carried,
                 "lead": lead_json(ai),
                 "lowest_hp_percent": (self.ai_hp_min != i32::MAX).then_some(self.ai_hp_min),
