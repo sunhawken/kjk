@@ -1330,7 +1330,9 @@ fn autosave(
     // An arena's level is never saved (`saves::refusal`): none owed there.
     let eligible = player.is_some_and(|player| player.0)
         && matches!(authority.source, Source::Live { .. })
-        && authority.world.level().arena_rules().is_none()
+        // The world may be away being stepped beside the frame; an arena is only
+        // ever opened from the menu's debug sandbox, so assume none until it is home.
+        && (!authority.world.home() || authority.world.level().arena_rules().is_none())
         && settings
             .is_some_and(|settings| settings.value(crate::settings::AUTOSAVE) == Some("true"));
     if due.observe(
