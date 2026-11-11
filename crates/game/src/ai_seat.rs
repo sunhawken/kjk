@@ -18,7 +18,7 @@ use sim::motion::{SOLE_Z, UNIT};
 use sim::moves::view_angles;
 use sim::script::dialogue::{Pick, answer};
 use sim::walk::Walker;
-use sim::{Command, Seat, SimId, Snapshot, buttons};
+use sim::{Command, Seat, Snapshot, buttons};
 use sim::{Kind, Level, ObjectState, TickRate};
 
 /// Within this many metres of the leader the seat stands.
@@ -74,15 +74,42 @@ pub fn yaw_toward(from: [f32; 3], to: [f32; 3]) -> f32 {
     (to[1] - from[1]).atan2(to[0] - from[0]).to_degrees()
 }
 
-/// The nearest living creature within `ENGAGE_M` of `me` that is fighting one
-/// of the `party` bodies: (its place, the metres to it, its hundredths of
-/// HP). Only those already fighting the party are enemies, so a neutral is
-/// never attacked.
+/// A body's standard faction: set at run time, else its sheet's, else its
+/// placement's template's (`None` when none is known).
+fn faction_of(level: &Level, entity: &sim::EntityState) -> Option<u8> {
+    entity
+        .fighter
+        .and_then(|fighter| fighter.faction)
+        .or_else(|| entity.sheet.map(|sheet| sheet.faction))
+        .or_else(|| match entity.kind {
+            Kind::Object(_, index) => level
+                .placed()
+                .get(index as usize)
+                .and_then(|facts| facts.sheet)
+                .map(|sheet| sheet.faction),
+            _ => None,
+        })
+}
+
+/// The nearest living creature within `ENGAGE_M` of `me` that is hostile by
+/// faction to the seat's body or to the leader's (`repute.2da` as the
+/// module has it), is not a plot character, and is already in a fight: (its
+/// place, the metres to it, its hundredths of HP). A hostile that stands
+/// idle, and any neutral, is left alone.
 fn nearest_enemy(
+    level: &Level,
     remote: &Snapshot,
-    party: [Option<SimId>; 2],
+    mine: Option<&sim::EntityState>,
+    leader: Option<&sim::EntityState>,
     me: [f32; 3],
 ) -> Option<([f32; 3], f32, i32)> {
+    let module = level.module()?;
+    let sides: Vec<u8> = [mine, leader]
+        .into_iter()
+        .flatten()
+        .filter_map(|body| faction_of(level, body))
+        .collect();
+    let now_ms = TickRate::default().time_ms(remote.tick);
     remote
         .entities
         .iter()
@@ -91,8 +118,15 @@ fn nearest_enemy(
                 return None;
             };
             let fighter = entity.fighter.filter(|fighter| fighter.alive())?;
-            let target = fighter.target?;
-            if !party.contains(&Some(target)) {
+            let plot = entity
+                .sheet
+                .is_some_and(|sheet| sheet.flags & sim::combat::sheet::flags::PLOT != 0);
+            let faction = faction_of(level, entity)?;
+            let hostile = sides
+                .iter()
+                .any(|side| module.repute.hostile(faction, *side));
+            let fighting = fighter.target.is_some() || fighter.combat_until > now_ms;
+            if plot || !hostile || !fighting {
                 return None;
             }
             let d = ((entity.position[0] - me[0]).powi(2) + (entity.position[1] - me[1]).powi(2))
@@ -195,14 +229,7 @@ impl AiSeat {
         self.last = Some(me);
         // Fight what is fighting the party, else follow the leader.
         let mine = snapshot.body(seat);
-        let enemy = nearest_enemy(
-            remote,
-            [
-                mine.map(|body| body.id),
-                remote.body(Seat(0)).map(|body| body.id),
-            ],
-            me,
-        );
+        let enemy = nearest_enemy(level, remote, mine, remote.body(Seat(0)), me);
         let ranged = mine
             .and_then(|body| body.sheet)
             .is_none_or(|sheet| sheet.main_weapon().delivery.ranged());
