@@ -681,10 +681,11 @@ pub(crate) fn assemble(
                     facts.exit().is_some()
                         && level.in_trigger(facts, crate::math::scale(player.origin, UNIT))
                 }
+                // By where it stands, open or not yet: a script opens the
+                // doors of an area after its arrival (the Star Forge's deck
+                // door, opened over the guest's body, bounced the party).
                 ObjectKind::Door => {
-                    object.state != 0
-                        && facts.exit().is_some()
-                        && in_doorway(level, index, player.origin, player.maxs_z)
+                    facts.exit().is_some() && in_doorway(level, index, player.origin, player.maxs_z)
                 }
                 _ => false,
             };
