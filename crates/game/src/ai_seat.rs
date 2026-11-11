@@ -528,6 +528,11 @@ impl AiSeat {
             // No body (it watches) or no one to follow: stand.
             return Command::default();
         };
+        // Solo mode: the companions stand where they are, a guest's body too
+        // (the Unknown World's floor tiles answer a follower's step).
+        if remote.solo {
+            return Command::default();
+        }
         if let Some(last) = self.last {
             let step = ((me[0] - last[0]).powi(2) + (me[1] - last[1]).powi(2)).sqrt();
             // A jump of metres in one frame is a load or a transfer, not
