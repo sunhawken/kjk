@@ -20,6 +20,38 @@ pub(super) fn diagnose(
         me.sheet.map_or(0, |sheet| sheet.level),
         me.sheet.map(|sheet| sheet.main_weapon().delivery)
     )];
+    // Everything standing close: a body or a placeable in the way shows here.
+    let mut close: Vec<(f32, String)> = snapshot
+        .entities
+        .iter()
+        .filter(|entity| entity.id != me.id)
+        .filter_map(|entity| {
+            let d = ((entity.position[0] - me.position[0]).powi(2)
+                + (entity.position[1] - me.position[1]).powi(2))
+            .sqrt();
+            (d < 8.0).then(|| {
+                (
+                    d,
+                    format!(
+                        "{:?} #{} at ({:.1}, {:.1}, {:.1}) {:.1} m{}",
+                        entity.kind,
+                        entity.id.0,
+                        entity.position[0],
+                        entity.position[1],
+                        entity.position[2],
+                        d,
+                        entity
+                            .fighter
+                            .map_or(String::new(), |f| format!(", {:?} hp {}", f.life, f.hp / 100))
+                    ),
+                )
+            })
+        })
+        .collect();
+    close.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (_, line) in close.iter().take(8) {
+        held.push(format!("close: {line}"));
+    }
     // What may keep it from moving: off the floor, using an item, held.
     let now = snapshot.time_ms;
     let mut state = Vec::new();
