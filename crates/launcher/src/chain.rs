@@ -275,6 +275,14 @@ fn arguments(route: &Route, chain_flags: &[String], options: &Options) -> Vec<St
     if options.mighty {
         flags.push("--mighty".to_string());
     }
+    // `KJK_CHAIN_MORTAL=1` plays without `--god` (the player can fall);
+    // `=2` without `--mighty` either (fights at their real length): a test
+    // of the partner against the game's own difficulty.
+    match std::env::var("KJK_CHAIN_MORTAL").as_deref() {
+        Ok("1") => flags.retain(|flag| flag != "--god"),
+        Ok("2") => flags.retain(|flag| flag != "--god" && flag != "--mighty"),
+        _ => {}
+    }
     for skill in &options.skills {
         flags.extend(["--skill".to_string(), skill.clone()]);
     }
