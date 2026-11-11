@@ -63,6 +63,8 @@ const LEAD_ARRIVE_M: f32 = 2.0;
 /// gone back to, so the seat never abandons them (and never deadlocks when
 /// the story starts it far away).
 const LEAD_RETURN_M: f32 = 40.0;
+/// Ticks between the partner's answers to a ready check.
+const READY_EVERY_TICKS: u64 = 50;
 /// Ticks between position reports in the log.
 const REPORT_TICKS: u64 = 50;
 
@@ -258,6 +260,9 @@ pub struct AiSeat {
     fought: u64,
     healed: u64,
     heal_below: i32,
+    /// When this seat last said it is ready to go through an exit someone
+    /// else walked into (`Action::Ready`).
+    readied: u64,
     /// The tag of the object to lead the human to (`KJK_AI_LEAD_TO`), as a
     /// route's `to`/`use`/`exit` goal names it.
     lead_tag: Option<String>,
@@ -312,6 +317,7 @@ impl AiSeat {
             explained: 0,
             fought: 0,
             healed: 0,
+            readied: 0,
             lead_tag: std::env::var("KJK_AI_LEAD_TO")
                 .ok()
                 .filter(|tag| !tag.is_empty()),
@@ -428,6 +434,18 @@ impl AiSeat {
     ) -> Command {
         self.poll_control(tick);
         let mut command = self.steer(level, snapshot, remote, replies, seat, tick);
+        // Someone else walked into an exit: the party goes when everyone is
+        // ready, and the partner follows, so it says it is (a seat that never
+        // answers would hold the party at the exit for good).
+        if let Some(check) = &remote.ready
+            && check.asked_by != seat
+            && check.ready & (1u64 << seat.0) == 0
+            && tick >= self.readied + READY_EVERY_TICKS
+        {
+            self.readied = tick;
+            self.pending.push(Action::Ready);
+            info!(target: "ai_seat", "tick {tick} ready to go to {} (asked by seat {})", check.module, check.asked_by.0);
+        }
         // Use a medpac when hurt (a press: the sim takes the first it finds).
         let body = snapshot.body(seat);
         if let (Some(fighter), Some(sheet)) =
