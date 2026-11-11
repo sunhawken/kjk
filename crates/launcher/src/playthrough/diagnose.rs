@@ -264,10 +264,22 @@ pub(super) fn diagnose(
                     object_of(here, index).state
                 ))
             }
-            None => held.push(format!(
-                "no object tagged {tag}{} in the module",
-                nth.map_or_else(String::new, |nth| format!(" (#{nth})"))
-            )),
+            None => {
+                // Tagged in the area's table (placed or made, there or gone)
+                // but not standing now, or not in the table at all.
+                let table = super::here::tagged(here, tag);
+                if table.is_empty() {
+                    held.push(format!(
+                        "no object tagged {tag}{} in the module",
+                        nth.map_or_else(String::new, |nth| format!(" (#{nth})"))
+                    ))
+                } else {
+                    held.push(format!(
+                        "{tag}: {} instance(s) in the module's table (numbers {table:?}), none standing now (gone, or not made yet)",
+                        table.len()
+                    ))
+                }
+            }
         }
     }
     // Any other goal held in combat (an exit refused, a ramp's script

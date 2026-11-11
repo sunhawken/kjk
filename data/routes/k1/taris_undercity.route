@@ -14,7 +14,10 @@ save hendar
 gone hendarsfate         # its body taken away: Mission's trigger
                          # (k_ptar_miscrt_en) does nothing while it is there
 to tar04_spmission       # out of the trigger and in again (tar04_miscrt):
+if Tar_Mission=0         # K1CP's Hendar script (k_ptar_hdfate_ud) already destroys this trigger and
+                         # starts Mission's scene itself (cp_tar04_missspl/spr); the vanilla flow still needs it
 to tar04_miscrt          # Mission, her Wookiee taken by Gamorreans
+end
 until Tar_Mission=30     # (tar04_mission: she joins; on the way out already
                          # when the fight left the party beyond her trigger)
 save mission
