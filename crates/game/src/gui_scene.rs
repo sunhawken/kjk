@@ -207,7 +207,9 @@ pub struct GuiScenes {
 impl GuiScenes {
     /// View `id`'s image (made the first time it is asked for).
     pub fn image(&mut self, id: TextureId, images: &mut Assets<Image>) -> Handle<Image> {
-        let layer = FIRST_LAYER + self.views.len();
+        // Layers 16..64 are all a RenderLayers mask holds; views come and go
+        // as screens change, so reuse them rather than count past the end.
+        let layer = FIRST_LAYER + self.views.len() % (64 - FIRST_LAYER);
         self.views
             .entry(id.0)
             .or_insert_with(|| Live {
