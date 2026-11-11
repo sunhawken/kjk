@@ -653,6 +653,11 @@ impl AiSeat {
         }
     }
 
+    /// The lead target and whether the seat has arrived at it and waited.
+    pub fn lead_state(&self) -> (Option<&str>, bool, bool) {
+        (self.lead_tag.as_deref(), self.lead_arrived, self.lead_waiting)
+    }
+
     /// (model calls kept, model calls dropped, model errors).
     pub fn llm_stats(&self) -> (u64, u64, u64) {
         (self.llm_calls, self.llm_dropped, self.llm_errors)

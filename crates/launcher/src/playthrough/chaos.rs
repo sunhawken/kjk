@@ -105,6 +105,13 @@ pub(super) struct Watch {
     ai_attacking: u64,
     ai_actions: u64,
     ai_with_body: u64,
+    ai_medpac_presses: u64,
+    /// Medical packs the party carries at the first step and the last seen.
+    medpacs_first: Option<u32>,
+    medpacs_last: u32,
+    carried: Vec<String>,
+    /// The lowest share (percent) of its HP the partner's body fell to.
+    ai_hp_min: i32,
     story: Vec<serde_json::Value>,
     /// The module the last step was in.
     module: Option<String>,
@@ -124,6 +131,11 @@ impl Watch {
             ai_attacking: 0,
             ai_actions: 0,
             ai_with_body: 0,
+            ai_medpac_presses: 0,
+            medpacs_first: None,
+            medpacs_last: 0,
+            carried: Vec::new(),
+            ai_hp_min: i32::MAX,
             story: Vec::new(),
             module: None,
             flew: 0,
@@ -152,6 +164,29 @@ impl Watch {
                 self.ai_moving += u64::from(command.forward != 0 || command.right != 0);
                 self.ai_attacking += u64::from(command.buttons & buttons::ATTACK != 0);
                 self.ai_with_body += u64::from(last.body(Seat(1)).is_some());
+                self.ai_medpac_presses += u64::from(command.buttons & buttons::MEDPAC != 0);
+                let packs: u32 = last
+                    .goods
+                    .carried(sim::inventory::PARTY)
+                    .filter(|(_, item)| item.template.to_ascii_lowercase().starts_with("g_i_medeqpt"))
+                    .map(|(_, item)| u32::from(item.stack))
+                    .sum();
+                if self.ai_step % 500 == 1 {
+                    self.carried = last
+                        .goods
+                        .carried(sim::inventory::PARTY)
+                        .map(|(_, item)| format!("{}x{}", item.template, item.stack))
+                        .collect();
+                }
+                self.medpacs_first.get_or_insert(packs);
+                self.medpacs_last = packs;
+                if let Some(body) = last.body(Seat(1))
+                    && let (Some(fighter), Some(sheet)) = (body.fighter, body.sheet)
+                    && sheet.max_hp > 0
+                    && fighter.alive()
+                {
+                    self.ai_hp_min = self.ai_hp_min.min(fighter.hp / i32::from(sheet.max_hp));
+                }
                 input.insert(Seat(1), command);
                 for action in ai.take_actions() {
                     self.ai_actions += 1;
@@ -182,6 +217,12 @@ impl Watch {
                 "attack_steps": self.ai_attacking,
                 "actions_sent": self.ai_actions,
                 "metres_walked": ai.travelled_m(),
+                "medpac_presses": self.ai_medpac_presses,
+                "medpacs_at_first_step": self.medpacs_first,
+                "medpacs_at_last_step": self.medpacs_last,
+                "carried_items": self.carried,
+                "lead": lead_json(ai),
+                "lowest_hp_percent": (self.ai_hp_min != i32::MAX).then_some(self.ai_hp_min),
             })),
             "story": self.story,
             "droid_steps": self.flew,
@@ -203,4 +244,10 @@ fn story(world: &sim::SimWorld, module: Option<String>) -> serde_json::Value {
         "journal": state.journal,
         "party": state.party.members,
     })
+}
+
+/// Where the partner stands in leading the human to a target.
+fn lead_json(ai: &kjk_game::ai_seat::AiSeat) -> serde_json::Value {
+    let (tag, arrived, waiting) = ai.lead_state();
+    serde_json::json!({"tag": tag, "arrived": arrived, "waiting_for_human": waiting})
 }
