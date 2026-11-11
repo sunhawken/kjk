@@ -401,7 +401,11 @@ impl AiSeat {
             if tick >= self.skipped + SKIP_EVERY_TICKS {
                 self.skipped = tick;
                 self.reply = answer(self.reply, Pick::Skip);
-                info!(target: "ai_seat", "tick {tick} in a conversation: skipping a line");
+                info!(
+                    target: "ai_seat",
+                    "tick {tick} in a conversation: skipping a line ({} entry {} replies {} texts {} party {} pc {:?} speaker {:?} asker {:?} until {} shown {})",
+                    talk.dialog, talk.entry, talk.replies.len(), replies.len(), talk.party, talk.pc, talk.speaker, talk.asker, talk.until_ms, talk.shown_ms
+                );
             }
             return Command {
                 reply: self.reply,
