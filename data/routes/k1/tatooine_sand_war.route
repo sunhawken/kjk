@@ -27,6 +27,7 @@ fight 30                 # leaving in a fight)
 exit AreaTransition      # the Sand People's territory (tat_m18ab)
 to tat18_sandspeak       # the enclave's gate and its guards
 fight 25
+say attack them all     # the warrior at the gate: no translator, so the fight (not the retreat)
 exit TatooineDoor3       # the Sand People's enclave (tat_m20aa)
 save tsw_sand_enclave
 fight 20
