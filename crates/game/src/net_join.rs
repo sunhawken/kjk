@@ -234,6 +234,8 @@ pub(crate) struct Joined {
     /// The level the client plays in now (the stage's, then each install's).
     level: Level,
     driver: Driver,
+    /// The AI seat's policy, when `KJK_AI_SEAT` is set (`ai_seat`).
+    ai: Option<crate::ai_seat::AiSeat>,
     look: Look,
     controls: Controls,
     lifecycle: Option<Lifecycle>,
@@ -300,6 +302,7 @@ pub fn install(
         joining,
         level,
         driver,
+        ai: std::env::var_os("KJK_AI_SEAT").map(|_| crate::ai_seat::AiSeat::new()),
         look: Look {
             pitch: 0.0,
             yaw: 0.0,
@@ -570,7 +573,13 @@ pub(crate) fn advance(
         selected.0 = joined.controls.power;
     }
     let rate = TickRate::default();
+    let seat = joined.joining.seat;
+    let ai_command = match (joined.ai.as_mut(), next_tick) {
+        (Some(ai), Some(tick)) => Some(ai.decide(own.presented.current(), seat, tick)),
+        _ => None,
+    };
     let command = match (&joined.driver, &actions, next_tick) {
+        _ if ai_command.is_some() => ai_command.unwrap_or_default(),
         (Driver::Player(Some(script)), _, Some(tick)) => {
             let mut command = script.command(rate.time_ms(tick.saturating_sub(1)));
             command.reply = joined.controls.scripted(command.reply);

@@ -20,6 +20,7 @@ macro_rules! outln {
 }
 
 pub mod acting;
+mod ai_seat;
 mod aim_fx;
 mod ambience;
 pub mod arena;
