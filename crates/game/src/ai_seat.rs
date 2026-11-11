@@ -393,6 +393,11 @@ impl AiSeat {
         info!(target: "ai_seat", "tick {tick} control changed: delegate {:?}, lead_to {:?}, {} reply phrases", self.delegate, self.lead_tag, self.says.len());
     }
 
+    /// Metres this seat's body has walked (steps under 2 m a tick).
+    pub fn travelled_m(&self) -> f32 {
+        self.travelled_m
+    }
+
     /// The actions the last `decide` asks to send beside its command.
     pub fn take_actions(&mut self) -> Vec<Action> {
         std::mem::take(&mut self.pending)

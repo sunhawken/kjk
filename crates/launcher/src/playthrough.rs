@@ -373,6 +373,9 @@ pub struct Options {
     /// Two phantom guests fly remote droids at random, every button of
     /// their kit pressed (`--droids chaos`, `chaos`).
     pub droids: bool,
+    /// With `droids`: the second seat is the AI partner, a guest who takes a
+    /// companion and plays it through `kjk_game::ai_seat` (`--droids ai`).
+    pub ai_partner: bool,
     /// A build's text (`--build`, `build::parse`): the character a new
     /// game makes, and the plan every level taken follows.
     pub build: Option<String>,
@@ -450,9 +453,9 @@ pub fn run(discovery: &Discovery, options: &Options) -> ExitCode {
             crate::by_hand::set_globals(&mut world, &options.globals);
             crate::by_hand::queue_scripts(&mut world, &options.scripts)?;
             if options.droids {
-                world.set_seats_held(chaos::HELD);
+                world.set_seats_held(if options.ai_partner { 2 } else { chaos::HELD });
             }
-            let mut watch = chaos::Watch::new(options.droids);
+            let mut watch = chaos::Watch::new(options.droids, options.ai_partner);
             let mut last = world.snapshot();
             let mut recorder = sim::Recorder::new(rate.hz(), last.clone(), world.level().id(), 100)
                 .with_script(world.script_state().clone());

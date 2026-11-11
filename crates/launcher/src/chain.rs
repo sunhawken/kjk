@@ -80,6 +80,9 @@ pub struct Options {
     /// chaos`), its story compared with the last plain chain's at every
     /// module left (`stories`).
     pub droids: bool,
+    /// With `droids`: the second seat is the AI partner (`--droids ai`), a
+    /// guest who takes a companion, not two chaos droids.
+    pub ai_partner: bool,
 }
 
 /// A route file, as its header plays it.
@@ -282,7 +285,8 @@ fn arguments(route: &Route, chain_flags: &[String], options: &Options) -> Vec<St
         flags.extend(["--goal-seconds".to_string(), seconds.to_string()]);
     }
     if options.droids {
-        flags.extend(["--droids".to_string(), "chaos".to_string()]);
+        let kind = if options.ai_partner { "ai" } else { "chaos" };
+        flags.extend(["--droids".to_string(), kind.to_string()]);
     }
     let mut arguments = vec![
         "playthrough".to_string(),

@@ -171,7 +171,7 @@ pub(crate) enum Verb {
         save_to: Option<std::path::PathBuf>,
         /// `chaos`: two phantom guests fly remote droids at random, every
         /// button of their kit pressed; the story kept as a plain run's
-        #[arg(long, value_parser = ["chaos"])]
+        #[arg(long, value_parser = ["chaos", "ai"])]
         droids: Option<String>,
         /// A build file (`playthrough::build`): the character a new game
         /// makes through character creation, and the plan its level-ups
@@ -231,7 +231,7 @@ pub(crate) enum Verb {
         /// `chaos`: every route alone, from the plain chain's checkpoint,
         /// with two chaos droids; its story changes at every module left,
         /// against the last plain chain's, listed for review
-        #[arg(long, value_parser = ["chaos"])]
+        #[arg(long, value_parser = ["chaos", "ai"])]
         droids: Option<String>,
     },
     /// Conversations: a module's DLGs, and conversations run headless
@@ -524,6 +524,7 @@ pub(crate) fn run(verb: Verb, size: Option<(u32, u32)>) -> ExitCode {
                         fail_fast: blocks.fail_fast(),
                         save_to,
                         droids: droids.is_some(),
+                        ai_partner: droids.as_deref() == Some("ai"),
                         build,
                     },
                 ),
@@ -565,6 +566,7 @@ pub(crate) fn run(verb: Verb, size: Option<(u32, u32)>) -> ExitCode {
                 dry_run,
                 saves,
                 droids: droids.is_some(),
+                ai_partner: droids.as_deref() == Some("ai"),
             },
         ),
         Verb::Dialogue { verb } => match verb {

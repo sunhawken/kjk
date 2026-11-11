@@ -95,6 +95,16 @@ fn aim(last: &Snapshot, from: [f32; 3]) -> Option<(f32, f32)> {
 /// a plain run's.
 pub(super) struct Watch {
     chaos: Option<Chaos>,
+    /// The AI partner (`--droids ai`): seat 1, a guest that takes a
+    /// companion, driven by `kjk_game::ai_seat`; and the step it is on.
+    ai: Option<kjk_game::ai_seat::AiSeat>,
+    ai_step: u64,
+    /// What the partner did: steps with a stick pushed, steps with the attack held, actions sent, its body's
+    /// steps (a body to drive), and the conversation lines it passed.
+    ai_moving: u64,
+    ai_attacking: u64,
+    ai_actions: u64,
+    ai_with_body: u64,
     story: Vec<serde_json::Value>,
     /// The module the last step was in.
     module: Option<String>,
@@ -105,9 +115,15 @@ pub(super) struct Watch {
 }
 
 impl Watch {
-    pub(super) fn new(droids: bool) -> Watch {
+    pub(super) fn new(droids: bool, ai_partner: bool) -> Watch {
         Watch {
-            chaos: droids.then(|| Chaos::new(1)),
+            chaos: (droids && !ai_partner).then(|| Chaos::new(1)),
+            ai: (droids && ai_partner).then(kjk_game::ai_seat::AiSeat::new),
+            ai_step: 0,
+            ai_moving: 0,
+            ai_attacking: 0,
+            ai_actions: 0,
+            ai_with_body: 0,
             story: Vec::new(),
             module: None,
             flew: 0,
@@ -127,6 +143,22 @@ impl Watch {
         if let Some(chaos) = &mut self.chaos {
             chaos.drive(world, last, input);
         }
+        if let Some(ai) = &mut self.ai {
+            // A minigame gives each seat its own run or gun: the partner sits it out.
+            if last.minigame.is_none() {
+                self.ai_step += 1;
+                let command =
+                    ai.decide(world.level(), last, last, &[], Seat(1), self.ai_step);
+                self.ai_moving += u64::from(command.forward != 0 || command.right != 0);
+                self.ai_attacking += u64::from(command.buttons & buttons::ATTACK != 0);
+                self.ai_with_body += u64::from(last.body(Seat(1)).is_some());
+                input.insert(Seat(1), command);
+                for action in ai.take_actions() {
+                    self.ai_actions += 1;
+                    input.act(Seat(1), action);
+                }
+            }
+        }
     }
 
     /// After a step: what the droids did in it.
@@ -143,6 +175,14 @@ impl Watch {
         let module = self.module.take();
         self.story.push(story(world, module));
         serde_json::json!({
+            "ai_partner": self.ai.as_ref().map(|ai| serde_json::json!({
+                "steps": self.ai_step,
+                "steps_with_a_body": self.ai_with_body,
+                "moving_steps": self.ai_moving,
+                "attack_steps": self.ai_attacking,
+                "actions_sent": self.ai_actions,
+                "metres_walked": ai.travelled_m(),
+            })),
             "story": self.story,
             "droid_steps": self.flew,
             "kit_presses": self.fired,
