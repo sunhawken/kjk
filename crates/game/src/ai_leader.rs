@@ -254,7 +254,7 @@ impl Leader {
     /// (`game::target_view`, over `sim::target`): the first thing it offers,
     /// from where the object is used (a door's action point), the walk
     /// steering until within reach, then the use asked of the host.
-    fn use_object(&mut self, world: &sim::SimWorld, snapshot: &Snapshot, index: u32, unlock: bool, tick: u64, actions: &mut Vec<Action>) -> Option<Used> {
+    fn use_object(&mut self, world: &sim::SimWorld, snapshot: &Snapshot, index: u32, unlock: bool, walk_only: bool, tick: u64, actions: &mut Vec<Action>) -> Option<Used> {
         use sim::target::{Spot, Stride, Walk};
         let level = world.level();
         let me = snapshot.body(SEAT)?;
@@ -303,7 +303,9 @@ impl Leader {
         }
         if self.walk.is_none() {
             if Walk::near(&ps, spot) {
-                actions.extend(sim::target::ask(choice, index, facts.kind));
+                if !walk_only {
+                    actions.extend(sim::target::ask(choice, index, facts.kind));
+                }
                 return Some(Used::Asked);
             }
             self.walk = Some(Walk::new(level, &ways, &ps, index, spot, choice, now_ms));
@@ -316,7 +318,9 @@ impl Leader {
             }
             Stride::Arrived => {
                 self.walk = None;
-                actions.extend(sim::target::ask(choice, index, facts.kind));
+                if !walk_only {
+                    actions.extend(sim::target::ask(choice, index, facts.kind));
+                }
                 Some(Used::Asked)
             }
             Stride::Unreachable => {
@@ -380,6 +384,24 @@ impl Leader {
         let in_talk = snapshot.talk_for(SEAT).is_some();
         match &step {
             Step::To(tag) => {
+                // A placeable or a door is walked up to where it is used (its
+                // middle may lie off the floor); anything else by the seat's
+                // own steering to its place.
+                if let Some(me) = me
+                    && let Some((index, object)) = Self::find(level, tag, 1, me)
+                    && matches!(object.kind, ObjectKind::Placeable | ObjectKind::Door)
+                {
+                    self.ai.set_lead(None);
+                    match self.use_object(world, snapshot, index, false, true, tick, &mut actions) {
+                        Some(Used::Steer(command)) => return (command, actions),
+                        Some(Used::Asked) => {
+                            self.next(tick, "walked up to it");
+                            return (Command::default(), actions);
+                        }
+                        Some(Used::Waiting) => return (Command::default(), actions),
+                        None => {}
+                    }
+                }
                 self.ai.set_lead(Some(tag.clone()));
                 let (_, arrived, _) = self.ai.lead_state();
                 if arrived {
@@ -484,7 +506,7 @@ impl Leader {
                             .is_some_and(|state| state.state != 0);
                     if object.kind == ObjectKind::Trigger || open_exit {
                         self.ai.set_lead(Some(tag.clone()));
-                    } else if let Some(done) = self.use_object(world, snapshot, index, unlock, tick, &mut actions) {
+                    } else if let Some(done) = self.use_object(world, snapshot, index, unlock, false, tick, &mut actions) {
                         match done {
                             Used::Steer(command) => return (command, actions),
                             Used::Asked => {
