@@ -263,9 +263,20 @@ impl Leader {
         let instances = sim::Instances::in_snapshot(level, snapshot);
         let facts = instances.of_entity(entity)?;
         let state = entity.object.unwrap_or_default();
-        let security = unlock.then_some(sim::target::Security { spike: None });
+        // A door that stays locked after the first tries is picked with the
+        // character's Security (the plan's own Open comes first: a lock's
+        // refusal is often a scene the story wants played).
+        let lock_picking = unlock || (self.pressed >= 2 && state.locked(facts.opens));
+        let security = lock_picking.then_some(sim::target::Security { spike: None });
         let choices = sim::target::choices(facts.kind, facts, state, false, security, None);
-        let choice = if unlock {
+        let choice = if lock_picking {
+            let picked = choices.iter().find(|choice| matches!(choice, sim::target::Choice::Unlock { .. }));
+            match picked {
+                Some(choice) => *choice,
+                None if unlock => return None,
+                None => *choices.first()?,
+            }
+        } else if unlock {
             // Security on a locked door: nothing to do when it is not locked.
             *choices.iter().find(|choice| matches!(choice, sim::target::Choice::Unlock { .. }))?
         } else {
@@ -403,7 +414,7 @@ impl Leader {
                                 object.kind == ObjectKind::Door
                                     && sim::target::entity(snapshot, index)
                                         .and_then(|entity| entity.object)
-                                        .is_some_and(|state| state.state == 0)
+                                        .is_some_and(|state| state.state == 0 && state.locked(object.opens))
                             })
                         });
                     if shut && self.pressed < 2 * PRESSES {
