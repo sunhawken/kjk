@@ -254,7 +254,7 @@ impl Leader {
     /// (`game::target_view`, over `sim::target`): the first thing it offers,
     /// from where the object is used (a door's action point), the walk
     /// steering until within reach, then the use asked of the host.
-    fn use_object(&mut self, world: &sim::SimWorld, snapshot: &Snapshot, index: u32, tick: u64, actions: &mut Vec<Action>) -> Option<Used> {
+    fn use_object(&mut self, world: &sim::SimWorld, snapshot: &Snapshot, index: u32, unlock: bool, tick: u64, actions: &mut Vec<Action>) -> Option<Used> {
         use sim::target::{Spot, Stride, Walk};
         let level = world.level();
         let me = snapshot.body(SEAT)?;
@@ -263,8 +263,14 @@ impl Leader {
         let instances = sim::Instances::in_snapshot(level, snapshot);
         let facts = instances.of_entity(entity)?;
         let state = entity.object.unwrap_or_default();
-        let choices = sim::target::choices(facts.kind, facts, state, false, None, None);
-        let choice = *choices.first()?;
+        let security = unlock.then_some(sim::target::Security { spike: None });
+        let choices = sim::target::choices(facts.kind, facts, state, false, security, None);
+        let choice = if unlock {
+            // Security on a locked door: nothing to do when it is not locked.
+            *choices.iter().find(|choice| matches!(choice, sim::target::Choice::Unlock { .. }))?
+        } else {
+            *choices.first()?
+        };
         let feet = sim::target::candidates(level, snapshot, Some(me.id))
             .into_iter()
             .find(|candidate| candidate.index == index)?
@@ -301,7 +307,12 @@ impl Leader {
             }
             Stride::Unreachable => {
                 self.walk = None;
-                info!(target: "ai_leader", "tick {tick} the walk to object {index} cannot reach it");
+                let goal = sim::math::scale(spot.at, 1.0 / sim::motion::UNIT);
+                info!(
+                    target: "ai_leader",
+                    "tick {tick} the walk to object {index} cannot reach it: from {:?} to {:?} ({}); feet {:?} spot {:?}",
+                    ps.origin, goal, sim::walk::why_none(level, ps.origin, [goal[0], goal[1], goal[2] - sim::motion::SOLE_Z]), sim::target::feet_at(ps.origin), spot.at
+                );
                 Some(Used::Asked)
             }
         }
@@ -326,14 +337,6 @@ impl Leader {
         while let Some(Step::Say(phrase)) = self.steps.get(self.at).cloned() {
             self.ai.add_say(&phrase);
             self.next(tick, "phrase kept");
-        }
-        while let Some(Step::Unlock(tag)) = self.steps.get(self.at).cloned() {
-            if let Some(me) = me
-                && let Some((object, _)) = Self::find(level, &tag, 1, me)
-            {
-                actions.push(Action::Unlock { object, spike: None });
-            }
-            self.next(tick, "unlock tried");
         }
         while let Some(Step::Skipped(line)) = self.steps.get(self.at).cloned() {
             info!(target: "ai_leader", "tick {tick} skipping a verb the leader does not do: {line}");
@@ -363,10 +366,11 @@ impl Leader {
                     return (Command::default(), actions);
                 }
             }
-            Step::Use(..) | Step::Exit(_) => {
+            Step::Use(..) | Step::Exit(_) | Step::Unlock(_) => {
+                let unlock = matches!(step, Step::Unlock(_));
                 let (tag, nth) = match &step {
                     Step::Use(tag, nth) => (tag, nth),
-                    Step::Exit(tag) => (tag, &1),
+                    Step::Exit(tag) | Step::Unlock(tag) => (tag, &1),
                     _ => unreachable!(),
                 };
                 let exit = matches!(step, Step::Exit(_));
@@ -422,7 +426,7 @@ impl Leader {
                     // A trigger is walked into by the seat's own steering.
                     if object.kind == ObjectKind::Trigger {
                         self.ai.set_lead(Some(tag.clone()));
-                    } else if let Some(done) = self.use_object(world, snapshot, index, tick, &mut actions) {
+                    } else if let Some(done) = self.use_object(world, snapshot, index, unlock, tick, &mut actions) {
                         match done {
                             Used::Steer(command) => return (command, actions),
                             Used::Asked => {
@@ -436,6 +440,10 @@ impl Leader {
                             }
                             Used::Waiting => return (Command::default(), actions),
                         }
+                    } else if unlock {
+                        // Nothing to unlock (it is not locked): on.
+                        self.next(tick, "not locked");
+                        return (Command::default(), actions);
                     } else if self.pressed >= 1 && tick >= self.last_press + 4 * HZ {
                         // Used, and it offers nothing more (a door that
                         // answered with a scene, a lock only a key opens).
@@ -515,7 +523,7 @@ impl Leader {
                 }
                 return (Command::default(), actions);
             }
-            Step::Say(_) | Step::Skipped(_) | Step::Unlock(_) => {}
+            Step::Say(_) | Step::Skipped(_) => {}
         }
         let command = self.ai.decide(level, snapshot, snapshot, texts, SEAT, tick);
         if tick % (HZ * 2) == 0 {

@@ -281,6 +281,8 @@ pub struct AiSeat {
     says: Vec<String>,
     /// The conversation line already answered: (dialog, entry).
     answered: Option<(String, u32)>,
+    /// The line last seen in a conversation (a line met again is answered again).
+    last_line: Option<(String, u32)>,
     /// A control file the human (or a chat bridge) edits while playing
     /// (`KJK_AI_CONTROL`): {"delegate": "off|light|dark|walkthrough",
     /// "lead_to": "TAG", "say_file": "PATH"}. Read again when it changes.
@@ -374,6 +376,7 @@ impl AiSeat {
                 })
                 .unwrap_or_default(),
             answered: None,
+            last_line: None,
             control: std::env::var_os("KJK_AI_CONTROL").map(std::path::PathBuf::from),
             control_seen: None,
             control_checked: 0,
@@ -731,6 +734,13 @@ impl AiSeat {
     ) -> Command {
         // A conversation holds the world until its lines are passed.
         if let Some(talk) = snapshot.talk_for(seat) {
+            // A line met again after others (a conversation that loops back
+            // to its question) is a new question.
+            let line = (talk.dialog.clone(), talk.entry);
+            if self.last_line.as_ref() != Some(&line) {
+                self.last_line = Some(line);
+                self.answered = None;
+            }
             // Handed the choices, the seat answers a reply once per line:
             // the human's own answer when confirming, else the model's
             // (checked) when one is set up, else the seat's rules.
