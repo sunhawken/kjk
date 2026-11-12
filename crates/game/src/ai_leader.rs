@@ -466,6 +466,11 @@ impl Leader {
                     self.talk_seen = tick;
                     return (self.ai.decide(level, snapshot, snapshot, texts, SEAT, tick), actions);
                 }
+                if self.talked && !exit && tick < self.talk_seen + TALK_OVER {
+                    // The talk has just ended: waiting out the gap before the
+                    // step goes on (pressing again would start it afresh).
+                    return (Command::default(), actions);
+                }
                 if self.talked && tick >= self.talk_seen + TALK_OVER {
                     // A door that answered with a conversation (a lock's
                     // refusal, a companion's warning) is used again until it
