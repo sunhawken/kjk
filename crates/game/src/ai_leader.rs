@@ -394,11 +394,29 @@ impl Leader {
                     return (self.ai.decide(level, snapshot, snapshot, texts, SEAT, tick), actions);
                 }
                 if self.talked && tick >= self.talk_seen + TALK_OVER {
-                    // Left for an explicit `talk` step to claim when the plan
-                    // has one next, as a route's does.
-                    self.unclaimed = matches!(self.steps.get(self.at + 1), Some(Step::Talk));
-                    self.next(tick, "its conversation ended");
-                    return (Command::default(), actions);
+                    // A door that answered with a conversation (a lock's
+                    // refusal, a companion's warning) is used again until it
+                    // is open: the step is the door opening, not the talk.
+                    let shut = !exit
+                        && me.is_some_and(|me| {
+                            Self::find(level, tag, *nth, me).is_some_and(|(index, object)| {
+                                object.kind == ObjectKind::Door
+                                    && sim::target::entity(snapshot, index)
+                                        .and_then(|entity| entity.object)
+                                        .is_some_and(|state| state.state == 0)
+                            })
+                        });
+                    if shut && self.pressed < 2 * PRESSES {
+                        self.talked = false;
+                        self.last_press = 0;
+                        info!(target: "ai_leader", "tick {tick} step {}: {tag} is still shut after its conversation: using it again", self.at + 1);
+                    } else {
+                        // Left for an explicit `talk` step to claim when the plan
+                        // has one next, as a route's does.
+                        self.unclaimed = matches!(self.steps.get(self.at + 1), Some(Step::Talk));
+                        self.next(tick, "its conversation ended");
+                        return (Command::default(), actions);
+                    }
                 }
                 if let Some(me) = me
                     && let Some((index, object)) = Self::find(level, tag, *nth, me)
@@ -440,7 +458,7 @@ impl Leader {
                                 self.pressed += 1;
                                 self.last_press = tick;
                                 info!(target: "ai_leader", "tick {tick} step {}: asked to use {tag}#{nth} (press {})", self.at + 1, self.pressed);
-                                if self.pressed >= PRESSES && !in_talk {
+                                if self.pressed >= 2 * PRESSES && !in_talk {
                                     self.next(tick, "asked, no answer: going on");
                                 }
                                 return (Command::default(), actions);
