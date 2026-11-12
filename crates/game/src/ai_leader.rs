@@ -461,7 +461,7 @@ impl Leader {
                     // closed, as a player takes everything and leaves: once
                     // the walk has brought the body within reach, taking
                     // again each second until the party carries more.
-                    if object.container && self.pressed >= 1 && flat(object.position, me) <= 2.5 {
+                    if object.container && self.pressed >= 1 && tick >= self.last_press + HZ {
                         let carried = world
                             .script_state()
                             .items
