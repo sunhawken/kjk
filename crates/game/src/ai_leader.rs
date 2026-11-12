@@ -329,6 +329,13 @@ impl Leader {
             info!(target: "ai_leader", "tick {tick} leading from {} through {} steps", self.module, self.steps.len());
         }
         let me = snapshot.body(SEAT).map(|body| body.position);
+        if tick % (HZ * 3) == 0 {
+            let ups = level_ups(world, snapshot);
+            if !ups.is_empty() {
+                info!(target: "ai_leader", "tick {tick} taking {} level-up(s)", ups.len());
+                actions.extend(ups);
+            }
+        }
         if std::mem::take(&mut self.party_screen) {
             actions.push(Action::ChooseParty(None));
             info!(target: "ai_leader", "tick {tick} the party table: closed with the party as it stands");
@@ -531,6 +538,52 @@ impl Leader {
         }
         (command, actions)
     }
+}
+
+/// The level-ups the party's XP allows, as the game's Auto Level Up takes
+/// them: the leader's own (in the class it took last, else the first) and
+/// each companion no seat plays. Asked again each time the leader looks, so
+/// a second level follows the first.
+fn level_ups(world: &sim::SimWorld, snapshot: &Snapshot) -> Vec<Action> {
+    let mut acts = Vec::new();
+    let Some(library) = world.level().scripts() else {
+        return acts;
+    };
+    let state = world.script_state();
+    let xp = state.xp(sim::inventory::PARTY);
+    if let Some(me) = crate::cast::me(snapshot, SEAT)
+        && let Some(sheet) = snapshot.get(me).and_then(|entity| entity.sheet)
+        && library.classes().may_level(sheet.level, xp)
+    {
+        let class = state
+            .careers
+            .get(&me.0)
+            .and_then(|career| career.last().map(|(class, _)| *class))
+            .unwrap_or(0);
+        acts.push(Action::LevelUp(sim::levels::Choices { class, ..sim::levels::Choices::default() }));
+    }
+    let instances = sim::Instances::in_snapshot(world.level(), snapshot);
+    for npc in state.party.available.values() {
+        let Some(id) = npc.object else { continue };
+        let Some(entity) = snapshot.get(sim::SimId(id)) else { continue };
+        let Some(data) = instances.of_entity(entity) else { continue };
+        let Some(sheet) = entity.sheet.or(data.sheet) else { continue };
+        let Some(followed) = entity.fighter.map(|fighter| fighter.mind) else { continue };
+        if followed.leader != Some(SEAT) || followed.driver.is_some() || !library.classes().may_level(sheet.level, xp) {
+            continue;
+        }
+        let career = match state.careers.get(&id) {
+            Some(career) => career.clone(),
+            None if data.classes.is_empty() => continue,
+            None => sim::levels::untaken(&data.classes, sheet.level, 0),
+        };
+        let Some(&(class, _)) = career.last() else { continue };
+        let banked = state.unspent.get(&id).copied().unwrap_or(0);
+        if let Some(choices) = library.classes().auto(&sheet, &career, class, banked) {
+            acts.push(Action::LevelUpOn { who: id, choices });
+        }
+    }
+    acts
 }
 
 /// Wear what the party carries (one item, by template, when named): what
