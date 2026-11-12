@@ -477,6 +477,8 @@ struct Authority {
     /// The music's volume a script set (`SetMusicVolume`), not yet taken by
     /// `script_music`.
     music_asked: Option<f32>,
+    /// The AI leading from the host's seat (`KJK_AI_LEAD_PLAN`).
+    leader: Option<crate::ai_leader::Leader>,
 }
 
 impl Authority {
@@ -675,6 +677,7 @@ pub fn install(app: &mut World, setup: SimSetup) -> Result<(), String> {
             flight,
             autosave_asked: false,
             music_asked: None,
+            leader: crate::ai_leader::Leader::from_env(),
         });
     }
     Ok(())
@@ -1951,6 +1954,38 @@ fn advance(
                 ..command
             }),
             (_, _, own) => own,
+        };
+        // The AI leader plays the host's seat from its plan, when there is one.
+        let own = match (&authority.source, authority.leader.as_mut(), &authority.lifecycle) {
+            (Source::Live { .. }, Some(leader), lifecycle) => {
+                let level = authority.world.level().clone();
+                let snapshot = authority.last.clone();
+                let texts: Vec<String> = match lifecycle {
+                    Some(lifecycle) => snapshot
+                        .talk_for(Seat(0))
+                        .map(|talk| {
+                            let said = |strref| lifecycle.installer.text(strref);
+                            talk.replies
+                                .iter()
+                                .map(|reply| {
+                                    level
+                                        .scripts()
+                                        .and_then(|library| library.dialogue(&talk.dialog))
+                                        .and_then(|dlg| dlg.replies.get(*reply as usize))
+                                        .map_or_else(String::new, |node| crate::transcript::text(&said, node))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    None => Vec::new(),
+                };
+                let (command, acts) = leader.command(&level, &snapshot, &texts, tick);
+                for action in acts {
+                    authority.solo.act(action);
+                }
+                Some(command)
+            }
+            (_, _, _) => own,
         };
         authority.solo.command(tick, own);
         let snapshot = match &mut authority.source {

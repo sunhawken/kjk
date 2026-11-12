@@ -612,6 +612,23 @@ impl AiSeat {
         }
     }
 
+    /// Lead (walk) to the nearest object with this tag; `None` stops.
+    pub fn set_lead(&mut self, tag: Option<String>) {
+        if tag != self.lead_tag {
+            self.lead_tag = tag;
+            self.lead_arrived = false;
+            self.lead_waiting = false;
+        }
+    }
+
+    /// A phrase a reply may be chosen by (the route's `say`), first match wins.
+    pub fn add_say(&mut self, phrase: &str) {
+        let phrase = phrase.trim().to_lowercase();
+        if !phrase.is_empty() {
+            self.says.push(phrase);
+        }
+    }
+
     /// The lead target and whether the seat has arrived at it and waited.
     pub fn lead_state(&self) -> (Option<&str>, bool, bool) {
         (self.lead_tag.as_deref(), self.lead_arrived, self.lead_waiting)
