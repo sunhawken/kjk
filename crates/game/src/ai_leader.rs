@@ -414,6 +414,7 @@ impl Leader {
             self.next(tick, "gave up: out of time");
             return (Command::default(), actions);
         }
+        self.ai.hunting = matches!(step, Step::Fight(_));
         let module_changed = level.name() != self.module;
         let in_talk = snapshot.talk_for(SEAT).is_some();
         match &step {

@@ -122,6 +122,7 @@ fn nearest_enemy(
     mine: Option<&sim::EntityState>,
     leader: Option<&sim::EntityState>,
     me: [f32; 3],
+    hunt: bool,
 ) -> Option<([f32; 3], f32, i32)> {
     let module = level.module()?;
     let sides: Vec<u8> = [mine, leader]
@@ -146,7 +147,7 @@ fn nearest_enemy(
                 .iter()
                 .any(|side| module.repute.hostile(faction, *side));
             let fighting = fighter.target.is_some() || fighter.combat_until > now_ms;
-            if plot || !hostile || !fighting {
+            if plot || !hostile || !(fighting || hunt) {
                 return None;
             }
             let d = ((entity.position[0] - me[0]).powi(2) + (entity.position[1] - me[1]).powi(2))
@@ -272,6 +273,8 @@ pub struct AiSeat {
     lead_point: Option<[f32; 3]>,
     /// The seat may take the area's exits (the AI leading, not a follower).
     pub allow_exits: bool,
+    /// The seat goes after hostiles that are not yet fighting (a fight step).
+    pub hunting: bool,
     lead_arrived: bool,
     lead_waiting: bool,
     /// Set when the human handed the choices over (`KJK_AI_DELEGATE`).
@@ -360,6 +363,7 @@ impl AiSeat {
                 .filter(|tag| !tag.is_empty()),
             lead_point: None,
             allow_exits: false,
+            hunting: false,
             lead_arrived: false,
             lead_waiting: false,
             delegate: match std::env::var("KJK_AI_DELEGATE").ok().as_deref() {
@@ -861,7 +865,7 @@ impl AiSeat {
         self.last = Some(me);
         // Fight what is fighting the party, else follow the leader.
         let mine = snapshot.body(seat);
-        let enemy = nearest_enemy(level, remote, mine, remote.body(Seat(0)), me);
+        let enemy = nearest_enemy(level, remote, mine, remote.body(Seat(0)), me, self.hunting);
         // A downed leader is revived (use held, facing it) unless an enemy is
         // close; that fight comes first.
         let leader_down = remote
