@@ -131,6 +131,8 @@ pub struct Leader {
     talk_seen: u64,
     /// The module the step began in (a transition ends an exit).
     module: String,
+    /// When a door on the way was last pressed.
+    door_pressed: u64,
     /// The walk to the object under use, as a player's use key makes it.
     walk: Option<sim::target::Walk>,
     /// The end of the plan was logged.
@@ -193,6 +195,7 @@ impl Leader {
             talked: false,
             talk_seen: 0,
             module: String::new(),
+            door_pressed: 0,
             walk: None,
             done_logged: false,
             party_screen: false,
@@ -287,11 +290,40 @@ impl Leader {
             .find(|candidate| candidate.index == index)?
             .feet;
         let spot = Spot::in_snapshot(level, snapshot, (index, facts.kind), choice, feet, &ps);
+        // Doors that open when used are ways, closed as they stand (opened on
+        // the way, below), as the partner's own walker plans them.
         let doors = |number: u32| {
-            sim::target::entity(snapshot, number)
+            let mut state = sim::target::entity(snapshot, number)
                 .and_then(|entity| entity.object)
-                .unwrap_or_default()
+                .unwrap_or_default();
+            if level
+                .placed()
+                .get(number as usize)
+                .is_some_and(|object| object.kind == ObjectKind::Door && object.opens != sim::module::Opens::Never)
+                && state.lock != sim::lock::LOCKED
+            {
+                state.lock = sim::lock::UNLOCKED;
+            }
+            state
         };
+        // A closed door close by on the way: opened, as a player's click does.
+        if tick >= self.door_pressed + 2 * HZ
+            && let Some((door, _)) = snapshot
+                .entities
+                .iter()
+                .filter_map(|entity| match (entity.kind, entity.object) {
+                    (sim::Kind::Object(ObjectKind::Door, number), Some(state)) if number != index && state.state == 0 => {
+                        let near = flat(entity.position, me.position);
+                        (near < 2.2).then_some((number, near))
+                    }
+                    _ => None,
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+        {
+            self.door_pressed = tick;
+            info!(target: "ai_leader", "tick {tick} a closed door {door} on the way: opening it");
+            actions.push(Action::Use { object: door, verb: sim::action::Verb::Open });
+        }
         let none: Vec<bool> = Vec::new();
         let ways = sim::walk::Walled { doors: &doors, walled: &none };
         let now_ms = snapshot.time_ms;
