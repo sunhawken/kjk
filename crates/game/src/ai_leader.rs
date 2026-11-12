@@ -304,6 +304,7 @@ impl Leader {
         if self.walk.is_none() {
             if Walk::near(&ps, spot) {
                 if !walk_only {
+                    info!(target: "ai_leader", "tick {tick} using object {index} {choice:?} from {:.2} m (within {:.2}, reach {:.2}) of its use point; feet {:?} spot {:?}", sim::math::flat_distance(sim::target::feet_at(ps.origin), spot.at), spot.within, spot.reach, sim::target::feet_at(ps.origin), spot.at);
                     actions.extend(sim::target::ask(choice, index, facts.kind));
                 }
                 return Some(Used::Asked);
@@ -319,6 +320,7 @@ impl Leader {
             Stride::Arrived => {
                 self.walk = None;
                 if !walk_only {
+                    info!(target: "ai_leader", "tick {tick} arrived at object {index} {choice:?}: {:.2} m from its use point (within {:.2}, reach {:.2}); feet {:?} spot {:?}", sim::math::flat_distance(sim::target::feet_at(ps.origin), spot.at), spot.within, spot.reach, sim::target::feet_at(ps.origin), spot.at);
                     actions.extend(sim::target::ask(choice, index, facts.kind));
                 }
                 Some(Used::Asked)
