@@ -509,8 +509,11 @@ impl Leader {
                 }
             }
             Step::Fight(seconds) => {
-                if tick >= self.began + seconds * HZ {
-                    self.next(tick, "the time is up");
+                // The fight is over when its time is up and no enemy has
+                // been fought for a few seconds (at most three times as long).
+                let quiet = tick >= self.ai.engaged_at() + 3 * HZ;
+                if (tick >= self.began + seconds * HZ && quiet) || tick >= self.began + 3 * seconds * HZ {
+                    self.next(tick, "the fight is over");
                     return (Command::default(), actions);
                 }
             }

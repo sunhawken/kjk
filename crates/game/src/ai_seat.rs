@@ -283,6 +283,8 @@ pub struct AiSeat {
     answered: Option<(String, u32)>,
     /// The line last seen in a conversation (a line met again is answered again).
     last_line: Option<(String, u32)>,
+    /// The last tick an enemy was being fought (`engaged_at`).
+    enemy_tick: u64,
     /// A control file the human (or a chat bridge) edits while playing
     /// (`KJK_AI_CONTROL`): {"delegate": "off|light|dark|walkthrough",
     /// "lead_to": "TAG", "say_file": "PATH"}. Read again when it changes.
@@ -377,6 +379,7 @@ impl AiSeat {
                 .unwrap_or_default(),
             answered: None,
             last_line: None,
+            enemy_tick: 0,
             control: std::env::var_os("KJK_AI_CONTROL").map(std::path::PathBuf::from),
             control_seen: None,
             control_checked: 0,
@@ -630,6 +633,11 @@ impl AiSeat {
         }
     }
 
+    /// The last tick the seat had an enemy to fight (0: never).
+    pub fn engaged_at(&self) -> u64 {
+        self.enemy_tick
+    }
+
     /// Lead (walk) to a point, game units.
     pub fn set_lead_point(&mut self, point: [f32; 3]) {
         if self.lead_point != Some(point) {
@@ -861,6 +869,9 @@ impl AiSeat {
             .and_then(|body| body.fighter)
             .is_some_and(|fighter| fighter.life == sim::combat::fighter::Life::Downed);
         let enemy = enemy.filter(|(_, d, _)| !leader_down || *d < FIGHT_FIRST_M);
+        if enemy.is_some() {
+            self.enemy_tick = tick;
+        }
         let reviving = leader_down && enemy.is_none();
         let flat =
             |a: [f32; 3], b: [f32; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt();
