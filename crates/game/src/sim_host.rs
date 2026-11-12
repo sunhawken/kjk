@@ -1493,7 +1493,16 @@ fn advance(
                 continue;
             }
             match notice {
-                sim::notice::Notice::Show(screen) => authority.solo.screen(seat, screen),
+                sim::notice::Notice::Show(screen) => {
+                    // The party table a script showed: the AI leader closes it
+                    // with the party as it stands.
+                    if matches!(screen, sim::notice::Screen::PartySelection(_))
+                        && let Some(leader) = authority.leader.as_mut()
+                    {
+                        leader.party_screen_shown();
+                    }
+                    authority.solo.screen(seat, screen)
+                }
                 sim::notice::Notice::Sound(sound) => authority.solo.sound(seat, sound),
                 notice => {
                     let text = crate::loot::words(&notice, ui.as_deref_mut());

@@ -24,7 +24,7 @@
 use sim::action::{Action, Verb};
 use sim::module::ObjectKind;
 use sim::{Command, Level, Seat, Snapshot};
-use tracing::info;
+use bevy::prelude::{error, info};
 
 use crate::ai_seat::{AiSeat, Delegate};
 
@@ -55,6 +55,10 @@ pub enum Step {
     Talk,
     Say(String),
     Fight(u64),
+    /// Make companion NPC_n (0-based) the party's leader, or the player again.
+    Leader(Option<u8>),
+    /// Security on a locked door or placeable.
+    Unlock(String),
     /// A verb the leader does not do (shown in the log).
     Skipped(String),
 }
@@ -78,6 +82,12 @@ pub fn parse(text: &str) -> Vec<Step> {
             "use" if !rest.is_empty() => Step::Use(tag, nth),
             "exit" if !rest.is_empty() => Step::Exit(tag),
             "talk" => Step::Talk,
+            "leader" if rest == "player" => Step::Leader(None),
+            "leader" => match rest.parse() {
+                Ok(n) => Step::Leader(Some(n)),
+                Err(_) => Step::Skipped(line.to_string()),
+            },
+            "unlock" if !rest.is_empty() => Step::Unlock(tag),
             "say" if !rest.is_empty() => Step::Say(rest.to_string()),
             "fight" => Step::Fight(rest.split_whitespace().next().and_then(|n| n.parse().ok()).unwrap_or(FIGHT_S)),
             _ => Step::Skipped(line.to_string()),
@@ -102,6 +112,8 @@ pub struct Leader {
     module: String,
     /// The end of the plan was logged.
     done_logged: bool,
+    /// A party table was shown and is not yet closed.
+    party_screen: bool,
 }
 
 impl Leader {
@@ -111,7 +123,7 @@ impl Leader {
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
             Err(error) => {
-                tracing::error!(target: "ai_leader", "cannot read the plan {path:?}: {error}");
+                error!(target: "ai_leader", "cannot read the plan {path:?}: {error}");
                 return None;
             }
         };
@@ -138,7 +150,13 @@ impl Leader {
             talk_seen: 0,
             module: String::new(),
             done_logged: false,
+            party_screen: false,
         }
+    }
+
+    /// A script showed the party table (the leader closes it).
+    pub fn party_screen_shown(&mut self) {
+        self.party_screen = true;
     }
 
     /// The step under way and how many there are (for the facts).
@@ -184,10 +202,26 @@ impl Leader {
             info!(target: "ai_leader", "tick {tick} leading from {} through {} steps", self.module, self.steps.len());
         }
         let me = snapshot.body(SEAT).map(|body| body.position);
+        if std::mem::take(&mut self.party_screen) {
+            actions.push(Action::ChooseParty(None));
+            info!(target: "ai_leader", "tick {tick} the party table: closed with the party as it stands");
+        }
         // Steps that take no time are taken at once.
         while let Some(Step::Say(phrase)) = self.steps.get(self.at).cloned() {
             self.ai.add_say(&phrase);
             self.next(tick, "phrase kept");
+        }
+        while let Some(Step::Leader(who)) = self.steps.get(self.at).cloned() {
+            actions.push(Action::SetLeader(who.unwrap_or(u8::MAX)));
+            self.next(tick, "leader set");
+        }
+        while let Some(Step::Unlock(tag)) = self.steps.get(self.at).cloned() {
+            if let Some(me) = me
+                && let Some((object, _)) = Self::find(level, &tag, 1, me)
+            {
+                actions.push(Action::Unlock { object, spike: None });
+            }
+            self.next(tick, "unlock tried");
         }
         while let Some(Step::Skipped(line)) = self.steps.get(self.at).cloned() {
             info!(target: "ai_leader", "tick {tick} skipping a verb the leader does not do: {line}");
@@ -217,7 +251,12 @@ impl Leader {
                     return (Command::default(), actions);
                 }
             }
-            Step::Use(tag, nth) | Step::Exit(tag) => {
+            Step::Use(..) | Step::Exit(_) => {
+                let (tag, nth) = match &step {
+                    Step::Use(tag, nth) => (tag, nth),
+                    Step::Exit(tag) => (tag, &1),
+                    _ => unreachable!(),
+                };
                 let exit = matches!(step, Step::Exit(_));
                 if module_changed && exit {
                     self.module = level.name().to_string();
@@ -230,7 +269,9 @@ impl Leader {
                     self.next(tick, "a conversation began");
                     return (self.ai.decide(level, snapshot, snapshot, texts, SEAT, tick), actions);
                 }
-                if let (Some(me), Some((index, object))) = (me, Self::find(level, tag, *nth, me)) {
+                if let Some(me) = me
+                    && let Some((index, object)) = Self::find(level, tag, *nth, me)
+                {
                     let near = flat(object.position, me) <= USE_WITHIN_M;
                     // A trigger is walked into, not used.
                     let walk_in = object.kind == ObjectKind::Trigger;
@@ -278,7 +319,7 @@ impl Leader {
                     return (Command::default(), actions);
                 }
             }
-            Step::Say(_) | Step::Skipped(_) => {}
+            Step::Say(_) | Step::Skipped(_) | Step::Leader(_) | Step::Unlock(_) => {}
         }
         (self.ai.decide(level, snapshot, snapshot, texts, SEAT, tick), actions)
     }
