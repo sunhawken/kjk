@@ -406,7 +406,8 @@ impl Leader {
                 }
                 self.ai.set_lead(Some(tag.clone()));
                 let (_, arrived, _) = self.ai.lead_state();
-                if arrived {
+                let close = me.is_some_and(|me| Self::find(level, tag, 1, me).is_some_and(|(_, object)| flat(object.position, me) <= 2.5));
+                if arrived || close {
                     self.next(tick, "arrived");
                     return (Command::default(), actions);
                 }
@@ -566,7 +567,10 @@ impl Leader {
             Step::At(x, y) => {
                 let z = me.map_or(0.0, |me| me[2]);
                 self.ai.set_lead_point([*x, *y, z]);
-                if self.ai.lead_state().1 {
+                // Arrived by the leader's own measure: the seat's flag is not
+                // set while it fights something it cannot reach.
+                let close = me.is_some_and(|me| flat(me, [*x, *y, z]) <= 2.5);
+                if self.ai.lead_state().1 || close {
                     self.next(tick, "arrived");
                     return (Command::default(), actions);
                 }
