@@ -268,6 +268,10 @@ pub struct AiSeat {
     /// The tag of the object to lead the human to (`KJK_AI_LEAD_TO`), as a
     /// route's `to`/`use`/`exit` goal names it.
     lead_tag: Option<String>,
+    /// A point to lead to instead (a route's `at X Y`), game units.
+    lead_point: Option<[f32; 3]>,
+    /// The seat may take the area's exits (the AI leading, not a follower).
+    pub allow_exits: bool,
     lead_arrived: bool,
     lead_waiting: bool,
     /// Set when the human handed the choices over (`KJK_AI_DELEGATE`).
@@ -350,6 +354,8 @@ impl AiSeat {
             lead_tag: std::env::var("KJK_AI_LEAD_TO")
                 .ok()
                 .filter(|tag| !tag.is_empty()),
+            lead_point: None,
+            allow_exits: false,
             lead_arrived: false,
             lead_waiting: false,
             delegate: match std::env::var("KJK_AI_DELEGATE").ok().as_deref() {
@@ -614,8 +620,18 @@ impl AiSeat {
 
     /// Lead (walk) to the nearest object with this tag; `None` stops.
     pub fn set_lead(&mut self, tag: Option<String>) {
-        if tag != self.lead_tag {
+        if self.lead_point.take().is_some() || tag != self.lead_tag {
             self.lead_tag = tag;
+            self.lead_arrived = false;
+            self.lead_waiting = false;
+        }
+    }
+
+    /// Lead (walk) to a point, game units.
+    pub fn set_lead_point(&mut self, point: [f32; 3]) {
+        if self.lead_point != Some(point) {
+            self.lead_point = Some(point);
+            self.lead_tag = None;
             self.lead_arrived = false;
             self.lead_waiting = false;
         }
@@ -847,6 +863,7 @@ impl AiSeat {
                 .map(|object| object.position)
                 .min_by(|a, b| flat(*a, me).total_cmp(&flat(*b, me)))
         });
+        let lead_target = lead_target.or(self.lead_point);
         let ranged = mine
             .and_then(|body| body.sheet)
             .is_none_or(|sheet| sheet.main_weapon().delivery.ranged());
@@ -1057,8 +1074,11 @@ impl AiSeat {
                 self.exit_floor = floor;
             }
             let tried = &self.tried.1;
-            let exit_doors = &self.exit_doors;
-            let exit_floor = &self.exit_floor;
+            let allow_exits = self.allow_exits;
+            let no_doors = BTreeSet::new();
+            let no_floor: Vec<bool> = Vec::new();
+            let exit_doors = if allow_exits { &no_doors } else { &self.exit_doors };
+            let exit_floor = if allow_exits { &no_floor } else { &self.exit_floor };
             let doors: BTreeMap<u32, ObjectState> = snapshot
                 .entities
                 .iter()

@@ -21,7 +21,7 @@
 //! stalls the game for good. Everything it decides is in the run's log
 //! (`ai_leader` target) and `facts` (`state`).
 
-use sim::action::{Action, Verb};
+use sim::action::Action;
 use sim::module::ObjectKind;
 use sim::{Command, Level, Seat, Snapshot};
 use bevy::prelude::{error, info};
@@ -31,7 +31,7 @@ use crate::ai_seat::{AiSeat, Delegate};
 /// The leader's seat: the host's.
 const SEAT: Seat = Seat(0);
 /// Play time before a step is given up on.
-const STEP_LIMIT_S: u64 = 90;
+const STEP_LIMIT_S: u64 = 60;
 /// Ticks per second of play (`sim::TICK_HZ`).
 const HZ: u64 = 125;
 /// A use is pressed again after this many ticks without an answer.
@@ -39,12 +39,11 @@ const PRESS_EVERY: u64 = HZ * 2;
 /// Presses before a use counts as done (a door that opened, a talk that
 /// never came) and the plan goes on.
 const PRESSES: u32 = 6;
+
 /// The fight step's default length (s).
 const FIGHT_S: u64 = 20;
 /// A conversation over for this long (ticks) ends a `talk` step.
 const TALK_OVER: u64 = HZ * 2;
-/// Within this many metres a use is pressed (the sim checks its own reach).
-const USE_WITHIN_M: f32 = 3.5;
 
 /// One step of the plan.
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +58,10 @@ pub enum Step {
     Leader(Option<u8>),
     /// Security on a locked door or placeable.
     Unlock(String),
+    /// Walk to a point (`at X Y`, as a route writes it).
+    At(f32, f32),
+    /// Wear what the party carries (`equip`, or one item by template).
+    Equip(Option<String>),
     /// A verb the leader does not do (shown in the log).
     Skipped(String),
 }
@@ -82,6 +85,14 @@ pub fn parse(text: &str) -> Vec<Step> {
             "use" if !rest.is_empty() => Step::Use(tag, nth),
             "exit" if !rest.is_empty() => Step::Exit(tag),
             "talk" => Step::Talk,
+            "at" => {
+                let mut n = rest.split_whitespace().filter_map(|v| v.parse::<f32>().ok());
+                match (n.next(), n.next()) {
+                    (Some(x), Some(y)) => Step::At(x, y),
+                    _ => Step::Skipped(line.to_string()),
+                }
+            }
+            "equip" => Step::Equip(if rest.is_empty() { None } else { Some(rest.to_ascii_lowercase()) }),
             "leader" if rest == "player" => Step::Leader(None),
             "leader" => match rest.parse() {
                 Ok(n) => Step::Leader(Some(n)),
@@ -94,6 +105,16 @@ pub fn parse(text: &str) -> Vec<Step> {
         });
     }
     steps
+}
+
+/// What a walk to use an object did this tick.
+enum Used {
+    /// The walk's command, in place of the seat's own.
+    Steer(Command),
+    /// Within reach: the use was asked of the host.
+    Asked,
+    /// Waiting for the last press to answer.
+    Waiting,
 }
 
 /// The leader's state across ticks.
@@ -110,10 +131,32 @@ pub struct Leader {
     talk_seen: u64,
     /// The module the step began in (a transition ends an exit).
     module: String,
+    /// The walk to the object under use, as a player's use key makes it.
+    walk: Option<sim::target::Walk>,
     /// The end of the plan was logged.
     done_logged: bool,
     /// A party table was shown and is not yet closed.
     party_screen: bool,
+    /// A conversation seen through by a use that the next `talk` claims.
+    unclaimed: bool,
+    /// What the host is asked to do this tick (`take_request`).
+    request: Request,
+    /// When a container's contents were first reached (0: not yet), what the
+    /// party carried then, and when it was last asked for them.
+    loot: u64,
+    carried_before: usize,
+    last_take: u64,
+}
+
+/// The use key's work for the host (`target_view`'s `Pinned` and `Acted`).
+#[derive(Default, Debug)]
+pub struct Request {
+    /// The target to hold (`Some(None)` lets it go).
+    pub pin: Option<Option<String>>,
+    /// The use key pressed.
+    pub act: bool,
+    /// The walk to the target steers, not the leader's own command.
+    pub defer: bool,
 }
 
 impl Leader {
@@ -134,6 +177,7 @@ impl Leader {
 
     pub fn new(steps: Vec<Step>) -> Leader {
         let mut ai = AiSeat::new();
+        ai.allow_exits = true;
         // The leader answers its own conversations: the light-side policy
         // unless the environment says dark.
         if ai.delegate.is_none() {
@@ -149,9 +193,20 @@ impl Leader {
             talked: false,
             talk_seen: 0,
             module: String::new(),
+            walk: None,
             done_logged: false,
             party_screen: false,
+            unclaimed: false,
+            request: Request::default(),
+            loot: 0,
+            carried_before: 0,
+            last_take: 0,
         }
+    }
+
+    /// The host's work for this tick, taken.
+    pub fn take_request(&mut self) -> Request {
+        std::mem::take(&mut self.request)
     }
 
     /// A script showed the party table (the leader closes it).
@@ -175,6 +230,9 @@ impl Leader {
         self.pressed = 0;
         self.last_press = 0;
         self.talked = false;
+        self.loot = 0;
+        self.walk = None;
+        self.request.pin = Some(None);
         self.ai.set_lead(None);
     }
 
@@ -192,9 +250,67 @@ impl Leader {
         found.into_iter().nth(nth.saturating_sub(1))
     }
 
+    /// Walk to object `index` and use it as the player's use key does
+    /// (`game::target_view`, over `sim::target`): the first thing it offers,
+    /// from where the object is used (a door's action point), the walk
+    /// steering until within reach, then the use asked of the host.
+    fn use_object(&mut self, world: &sim::SimWorld, snapshot: &Snapshot, index: u32, tick: u64, actions: &mut Vec<Action>) -> Option<Used> {
+        use sim::target::{Spot, Stride, Walk};
+        let level = world.level();
+        let me = snapshot.body(SEAT)?;
+        let ps = me.player?;
+        let entity = sim::target::entity(snapshot, index)?;
+        let instances = sim::Instances::in_snapshot(level, snapshot);
+        let facts = instances.of_entity(entity)?;
+        let state = entity.object.unwrap_or_default();
+        let choices = sim::target::choices(facts.kind, facts, state, false, None, None);
+        let choice = *choices.first()?;
+        let feet = sim::target::candidates(level, snapshot, Some(me.id))
+            .into_iter()
+            .find(|candidate| candidate.index == index)?
+            .feet;
+        let spot = Spot::in_snapshot(level, snapshot, (index, facts.kind), choice, feet, &ps);
+        let doors = |number: u32| {
+            sim::target::entity(snapshot, number)
+                .and_then(|entity| entity.object)
+                .unwrap_or_default()
+        };
+        let none: Vec<bool> = Vec::new();
+        let ways = sim::walk::Walled { doors: &doors, walled: &none };
+        let now_ms = snapshot.time_ms;
+        if tick < self.last_press + PRESS_EVERY && self.pressed > 0 {
+            return Some(Used::Waiting);
+        }
+        if self.walk.is_none() {
+            if Walk::near(&ps, spot) {
+                actions.extend(sim::target::ask(choice, index, facts.kind));
+                return Some(Used::Asked);
+            }
+            self.walk = Some(Walk::new(level, &ways, &ps, index, spot, choice, now_ms));
+        }
+        let mut walk = self.walk?;
+        match walk.stride(level, &ways, &ps, spot, now_ms) {
+            Stride::Steer(command) => {
+                self.walk = Some(walk);
+                Some(Used::Steer(command))
+            }
+            Stride::Arrived => {
+                self.walk = None;
+                actions.extend(sim::target::ask(choice, index, facts.kind));
+                Some(Used::Asked)
+            }
+            Stride::Unreachable => {
+                self.walk = None;
+                info!(target: "ai_leader", "tick {tick} the walk to object {index} cannot reach it");
+                Some(Used::Asked)
+            }
+        }
+    }
+
     /// The seat's command this tick, and the actions it takes. `texts` are
     /// the reply texts of the conversation the seat is in.
-    pub fn command(&mut self, level: &Level, snapshot: &Snapshot, texts: &[String], tick: u64) -> (Command, Vec<Action>) {
+    pub fn command(&mut self, world: &sim::SimWorld, snapshot: &Snapshot, texts: &[String], tick: u64) -> (Command, Vec<Action>) {
+        let level = world.level();
         let mut actions = Vec::new();
         if self.began == 0 {
             self.began = tick;
@@ -210,10 +326,6 @@ impl Leader {
         while let Some(Step::Say(phrase)) = self.steps.get(self.at).cloned() {
             self.ai.add_say(&phrase);
             self.next(tick, "phrase kept");
-        }
-        while let Some(Step::Leader(who)) = self.steps.get(self.at).cloned() {
-            actions.push(Action::SetLeader(who.unwrap_or(u8::MAX)));
-            self.next(tick, "leader set");
         }
         while let Some(Step::Unlock(tag)) = self.steps.get(self.at).cloned() {
             if let Some(me) = me
@@ -264,37 +376,71 @@ impl Leader {
                     return (Command::default(), actions);
                 }
                 if in_talk && !exit {
-                    // The use opened a conversation: the next `talk` step
-                    // (or the policy alone) sees it through.
-                    self.next(tick, "a conversation began");
+                    // The use opened a conversation: it is seen through
+                    // (the replies chosen by the policy) before the plan goes on.
+                    self.talked = true;
+                    self.talk_seen = tick;
                     return (self.ai.decide(level, snapshot, snapshot, texts, SEAT, tick), actions);
+                }
+                if self.talked && tick >= self.talk_seen + TALK_OVER {
+                    // Left for an explicit `talk` step to claim when the plan
+                    // has one next, as a route's does.
+                    self.unclaimed = matches!(self.steps.get(self.at + 1), Some(Step::Talk));
+                    self.next(tick, "its conversation ended");
+                    return (Command::default(), actions);
                 }
                 if let Some(me) = me
                     && let Some((index, object)) = Self::find(level, tag, *nth, me)
                 {
-                    let near = flat(object.position, me) <= USE_WITHIN_M;
-                    // A trigger is walked into, not used.
-                    let walk_in = object.kind == ObjectKind::Trigger;
-                    if !near || walk_in {
-                        // The lead walks to the nearest with the tag.
+                    // A container opened by the first press is emptied and
+                    // closed, as a player takes everything and leaves: once
+                    // the walk has brought the body within reach, taking
+                    // again each second until the party carries more.
+                    if object.container && self.pressed >= 1 && flat(object.position, me) <= 2.5 {
+                        let carried = world
+                            .script_state()
+                            .items
+                            .values()
+                            .filter(|item| item.holder == sim::inventory::PARTY)
+                            .count();
+                        if self.loot == 0 {
+                            self.loot = tick.max(1);
+                            self.carried_before = carried;
+                        }
+                        if carried > self.carried_before || tick >= self.loot + 6 * HZ {
+                            actions.push(Action::Close(index));
+                            self.next(tick, "container emptied");
+                        } else if tick >= self.last_take + HZ {
+                            self.last_take = tick;
+                            // Opened and emptied in one tick, as the harness's loot step does.
+                            actions.push(Action::Use { object: index, verb: sim::action::Verb::Open });
+                            actions.push(Action::TakeAll(index));
+                            info!(target: "ai_leader", "tick {tick} taking everything from {tag}");
+                        }
+                        return (Command::default(), actions);
+                    }
+                    // A trigger is walked into by the seat's own steering.
+                    if object.kind == ObjectKind::Trigger {
                         self.ai.set_lead(Some(tag.clone()));
-                    } else {
-                        self.ai.set_lead(None);
-                        if tick >= self.last_press + PRESS_EVERY {
-                            let verb = match object.kind {
-                                ObjectKind::Door => Verb::Open,
-                                ObjectKind::Creature => Verb::Talk,
-                                _ => Verb::Use,
-                            };
-                            actions.push(Action::Use { object: index, verb });
-                            self.pressed += 1;
-                            self.last_press = tick;
-                            info!(target: "ai_leader", "tick {tick} step {}: {verb:?} {tag}#{nth} (press {})", self.at + 1, self.pressed);
+                    } else if let Some(done) = self.use_object(world, snapshot, index, tick, &mut actions) {
+                        match done {
+                            Used::Steer(command) => return (command, actions),
+                            Used::Asked => {
+                                self.pressed += 1;
+                                self.last_press = tick;
+                                info!(target: "ai_leader", "tick {tick} step {}: asked to use {tag}#{nth} (press {})", self.at + 1, self.pressed);
+                                if self.pressed >= PRESSES && !in_talk {
+                                    self.next(tick, "asked, no answer: going on");
+                                }
+                                return (Command::default(), actions);
+                            }
+                            Used::Waiting => return (Command::default(), actions),
                         }
-                        if self.pressed >= PRESSES && !in_talk {
-                            self.next(tick, "pressed, no answer: going on");
-                            return (Command::default(), actions);
-                        }
+                    } else if self.pressed >= 1 && tick >= self.last_press + 4 * HZ {
+                        // Used, and it offers nothing more (a door that
+                        // answered with a scene, a lock only a key opens).
+                        self.next(tick, "used; it offers nothing more");
+                        return (Command::default(), actions);
                     }
                 } else if tick >= self.began + 3 * HZ {
                     self.next(tick, "no such object here");
@@ -302,14 +448,19 @@ impl Leader {
                 }
             }
             Step::Talk => {
+                if self.unclaimed && !in_talk {
+                    self.unclaimed = false;
+                    self.next(tick, "claimed the conversation just seen");
+                    return (Command::default(), actions);
+                }
                 if in_talk {
                     self.talked = true;
                     self.talk_seen = tick;
+                } else if !self.talked && tick >= self.began + 40 * HZ {
+                    self.next(tick, "no conversation came");
+                    return (Command::default(), actions);
                 } else if self.talked && tick >= self.talk_seen + TALK_OVER {
                     self.next(tick, "the conversation ended");
-                    return (Command::default(), actions);
-                } else if !self.talked && tick >= self.began + 4 * HZ {
-                    self.next(tick, "no conversation came");
                     return (Command::default(), actions);
                 }
             }
@@ -319,10 +470,116 @@ impl Leader {
                     return (Command::default(), actions);
                 }
             }
-            Step::Say(_) | Step::Skipped(_) | Step::Leader(_) | Step::Unlock(_) => {}
+            Step::At(x, y) => {
+                let z = me.map_or(0.0, |me| me[2]);
+                self.ai.set_lead_point([*x, *y, z]);
+                if self.ai.lead_state().1 {
+                    self.next(tick, "arrived");
+                    return (Command::default(), actions);
+                }
+            }
+            Step::Leader(who) => {
+                let npc = who.unwrap_or(u8::MAX);
+                let led = world.script_state().party.leader == Some(npc).filter(|npc| *npc != u8::MAX);
+                if led || (npc == u8::MAX && world.script_state().party.leader.is_none()) {
+                    self.next(tick, "leader set");
+                    return (Command::default(), actions);
+                }
+                // Asked again while not yet led, as a player clicks the
+                // portrait again.
+                if tick >= self.last_press + PRESS_EVERY {
+                    self.last_press = tick;
+                    actions.push(lead_to(world, snapshot, npc));
+                }
+                return (Command::default(), actions);
+            }
+            Step::Equip(named) => {
+                // Asked again until the party carries something to wear (a
+                // container's take lands a tick or two late).
+                let wear = equip(world, snapshot, named.as_deref());
+                if tick % (HZ * 2) == 0 {
+                    let held: Vec<String> = world
+                        .script_state()
+                        .items
+                        .values()
+                        .filter(|item| item.holder == sim::inventory::PARTY)
+                        .map(|item| item.template.clone())
+                        .collect();
+                    info!(target: "ai_leader", "tick {tick} equip: the party carries {held:?}, me {:?}", crate::cast::me(snapshot, SEAT));
+                }
+                if !wear.is_empty() {
+                    actions.extend(wear);
+                    self.next(tick, "wearing what the party carries");
+                } else if tick >= self.began + 10 * HZ {
+                    self.next(tick, "nothing to wear");
+                }
+                return (Command::default(), actions);
+            }
+            Step::Say(_) | Step::Skipped(_) | Step::Unlock(_) => {}
         }
-        (self.ai.decide(level, snapshot, snapshot, texts, SEAT, tick), actions)
+        let command = self.ai.decide(level, snapshot, snapshot, texts, SEAT, tick);
+        if tick % (HZ * 2) == 0 {
+            info!(target: "ai_leader", "tick {tick} command: forward {} right {} angles {:?} buttons {:?} reply {}", command.forward, command.right, command.angles, command.buttons, command.reply);
+        }
+        (command, actions)
     }
+}
+
+/// Wear what the party carries (one item, by template, when named): what
+/// the equip screen would do for the seat's own character.
+fn equip(world: &sim::SimWorld, snapshot: &Snapshot, named: Option<&str>) -> Vec<Action> {
+    let Some(me) = crate::cast::me(snapshot, SEAT) else {
+        return Vec::new();
+    };
+    let Some(library) = world.level().scripts() else {
+        return Vec::new();
+    };
+    let race = snapshot.get(me).and_then(|e| e.sheet).map(|sheet| sheet.race);
+    let state = world.script_state();
+    let mut worn: u32 = state
+        .items
+        .values()
+        .filter(|item| item.holder == me.0)
+        .filter_map(|item| item.slot)
+        .fold(0, |worn, slot| worn | 1 << slot);
+    let mut wear = Vec::new();
+    for (id, item) in state
+        .items
+        .iter()
+        .filter(|(_, item)| item.holder == sim::inventory::PARTY)
+        .filter(|(_, item)| named.is_none_or(|named| item.is(named)))
+    {
+        let slots = state
+            .item_facts(library.items(), &item.template)
+            .filter(|facts| race.is_none_or(|race| facts.fits(race)))
+            .map_or(0, |facts| facts.slots);
+        if named.is_some() {
+            if let Some(slot) = (0..32u8).find(|bit| slots & (1 << bit) != 0) {
+                return vec![Action::Equip { item: *id, slot }];
+            }
+            continue;
+        }
+        if let Some(slot) = (0..32u8).find(|bit| slots & !worn & (1 << bit) != 0) {
+            worn |= 1 << slot;
+            wear.push(Action::Equip { item: *id, slot });
+        }
+    }
+    wear
+}
+
+/// The action that makes party member `npc` (`u8::MAX`: the player) lead.
+fn lead_to(world: &sim::SimWorld, snapshot: &Snapshot, npc: u8) -> Action {
+    let body = match npc {
+        u8::MAX => snapshot.own(SEAT).map(|own| own.id),
+        npc => world
+            .script_state()
+            .party
+            .available
+            .get(&npc)
+            .and_then(|known| known.object)
+            .map(sim::SimId),
+    };
+    body.map_or(Action::SetLeader(npc), Action::Lead)
 }
 
 fn flat(a: [f32; 3], b: [f32; 3]) -> f32 {

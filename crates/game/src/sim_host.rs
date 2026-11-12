@@ -1472,6 +1472,10 @@ fn advance(
         ResMut<ReloadRequest>,
         Res<RunFolder>,
     ),
+    (mut pinned, mut acted): (
+        Option<ResMut<crate::target_view::Pinned>>,
+        Option<ResMut<crate::target_view::Acted>>,
+    ),
     (mut outgoing, mut told, mut shown, mut heard, mut ui, camera_aim): (
         Option<ResMut<crate::loot::Outgoing>>,
         Option<ResMut<crate::loot::Told>>,
@@ -1489,6 +1493,9 @@ fn advance(
     let landed = authority.landed.take();
     if let Some(landed) = &landed {
         for (seat, notice) in landed.notices.iter().cloned() {
+            if authority.leader.is_some() && matches!(notice, sim::notice::Notice::Show(_)) {
+                info!(target: "ai_leader", "a screen shown to seat {}: {:?}", seat.0, notice);
+            }
             if authority.took(&notice) {
                 continue;
             }
@@ -1988,11 +1995,27 @@ fn advance(
                         .unwrap_or_default(),
                     None => Vec::new(),
                 };
-                let (command, acts) = leader.command(&level, &snapshot, &texts, tick);
+                // The party table a script opened (a companion joined): the
+                // leader closes it with the party as it stands.
+                if let Some(ui) = ui.as_deref_mut()
+                    && ui.stack.top() == Some(ui::screen::ScreenId("party"))
+                {
+                    leader.party_screen_shown();
+                    ui.stack.pop();
+                }
+                let (command, acts) = leader.command(&authority.world, &snapshot, &texts, tick);
                 for action in acts {
                     authority.solo.act(action);
                 }
-                Some(command)
+                let request = leader.take_request();
+                if let (Some(pin), Some(pinned)) = (request.pin, pinned.as_deref_mut()) {
+                    pinned.0 = pin;
+                }
+                if let (true, Some(acted)) = (request.act, acted.as_deref_mut()) {
+                    acted.0 = true;
+                }
+                // A walk to the target steers (`autopilot`), not the leader.
+                if request.defer { own } else { Some(command) }
             }
             (_, _, _) => own,
         };
