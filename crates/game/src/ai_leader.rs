@@ -180,6 +180,7 @@ impl Leader {
     pub fn new(steps: Vec<Step>) -> Leader {
         let mut ai = AiSeat::new();
         ai.allow_exits = true;
+        ai.consume_says = true;
         // The leader answers its own conversations: the light-side policy
         // unless the environment says dark.
         if ai.delegate.is_none() {
@@ -510,6 +511,14 @@ impl Leader {
                         }
                         if carried > self.carried_before || tick >= self.loot + 6 * HZ {
                             actions.push(Action::Close(index));
+                            let held: Vec<String> = world
+                                .script_state()
+                                .items
+                                .values()
+                                .filter(|item| item.holder == sim::inventory::PARTY)
+                                .map(|item| format!("{}x{}", item.template, item.stack))
+                                .collect();
+                            info!(target: "ai_leader", "tick {tick} the party carries {held:?} (was {} items)", self.carried_before);
                             self.next(tick, "container emptied");
                         } else if tick >= self.last_take + HZ {
                             self.last_take = tick;

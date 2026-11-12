@@ -273,6 +273,9 @@ pub struct AiSeat {
     lead_point: Option<[f32; 3]>,
     /// The seat may take the area's exits (the AI leading, not a follower).
     pub allow_exits: bool,
+    /// A phrase of the route's `say` is used up by the reply it picks (the
+    /// route's own order), not kept for every later menu.
+    pub consume_says: bool,
     /// The seat goes after hostiles that are not yet fighting (a fight step).
     pub hunting: bool,
     lead_arrived: bool,
@@ -363,6 +366,7 @@ impl AiSeat {
                 .filter(|tag| !tag.is_empty()),
             lead_point: None,
             allow_exits: false,
+            consume_says: false,
             hunting: false,
             lead_arrived: false,
             lead_waiting: false,
@@ -763,6 +767,12 @@ impl AiSeat {
                 && tick >= self.skipped + SKIP_EVERY_TICKS
                 && let Some((index, why)) = pick_reply(replies, &self.says, policy)
             {
+                if self.consume_says
+                    && let Some(phrase) = why.strip_prefix("the route says \"").and_then(|rest| rest.strip_suffix('"'))
+                    && let Some(at) = self.says.iter().position(|said| said == phrase)
+                {
+                    self.says.remove(at);
+                }
                 let key = (talk.dialog.clone(), talk.entry);
                 let label = format!("{}:{}", key.0, key.1);
                 let mut chosen = (index, "rules".to_string(), why.to_string());
