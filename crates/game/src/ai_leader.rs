@@ -462,8 +462,27 @@ impl Leader {
                         }
                         return (Command::default(), actions);
                     }
-                    // A trigger is walked into by the seat's own steering.
-                    if object.kind == ObjectKind::Trigger {
+                    // A door that is open is used: pressing it again would close
+                    // it (an open door's first choice is Close).
+                    if !exit
+                        && !unlock
+                        && object.kind == ObjectKind::Door
+                        && sim::target::entity(snapshot, index)
+                            .and_then(|entity| entity.object)
+                            .is_some_and(|state| state.state != 0)
+                    {
+                        self.unclaimed = matches!(self.steps.get(self.at + 1), Some(Step::Talk)) && self.talked;
+                        self.next(tick, "the door is open");
+                        return (Command::default(), actions);
+                    }
+                    // A trigger, or a door open to go out by, is walked into by
+                    // the seat's own steering.
+                    let open_exit = exit
+                        && object.kind == ObjectKind::Door
+                        && sim::target::entity(snapshot, index)
+                            .and_then(|entity| entity.object)
+                            .is_some_and(|state| state.state != 0);
+                    if object.kind == ObjectKind::Trigger || open_exit {
                         self.ai.set_lead(Some(tag.clone()));
                     } else if let Some(done) = self.use_object(world, snapshot, index, unlock, tick, &mut actions) {
                         match done {
