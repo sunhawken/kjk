@@ -1493,8 +1493,12 @@ fn advance(
     let landed = authority.landed.take();
     if let Some(landed) = &landed {
         for (seat, notice) in landed.notices.iter().cloned() {
-            if authority.leader.is_some() && matches!(notice, sim::notice::Notice::Show(_)) {
-                info!(target: "ai_leader", "a screen shown to seat {}: {:?}", seat.0, notice);
+            if authority.leader.is_some() {
+                if matches!(notice, sim::notice::Notice::Show(_)) {
+                    info!(target: "ai_leader", "a screen shown to seat {}: {:?}", seat.0, notice);
+                } else if seat.0 == 0 {
+                    info!(target: "ai_leader", "a notice to the leader: {:?}", notice);
+                }
             }
             if authority.took(&notice) {
                 continue;

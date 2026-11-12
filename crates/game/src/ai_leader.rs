@@ -295,6 +295,9 @@ impl Leader {
         let none: Vec<bool> = Vec::new();
         let ways = sim::walk::Walled { doors: &doors, walled: &none };
         let now_ms = snapshot.time_ms;
+        if tick % (HZ * 4) == 0 && self.pressed > 0 {
+            info!(target: "ai_leader", "tick {tick} object {index}: state {:?}, choices {choices:?}, picked {choice:?}", state, );
+        }
         if tick < self.last_press + PRESS_EVERY && self.pressed > 0 {
             return Some(Used::Waiting);
         }
