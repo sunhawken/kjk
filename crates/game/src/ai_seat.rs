@@ -287,6 +287,9 @@ pub struct AiSeat {
     says: Vec<String>,
     /// The conversation line already answered: (dialog, entry).
     answered: Option<(String, u32)>,
+    /// When that line was answered, and how many times it came back unanswered.
+    answered_at: u64,
+    retries: usize,
     /// The line last seen in a conversation (a line met again is answered again).
     last_line: Option<(String, u32)>,
     /// The last tick an enemy was being fought (`engaged_at`).
@@ -386,6 +389,8 @@ impl AiSeat {
                 })
                 .unwrap_or_default(),
             answered: None,
+            answered_at: 0,
+            retries: 0,
             last_line: None,
             enemy_tick: 0,
             control: std::env::var_os("KJK_AI_CONTROL").map(std::path::PathBuf::from),
@@ -754,8 +759,15 @@ impl AiSeat {
             // to its question) is a new question.
             let line = (talk.dialog.clone(), talk.entry);
             if self.last_line.as_ref() != Some(&line) {
-                self.last_line = Some(line);
+                self.last_line = Some(line.clone());
                 self.answered = None;
+                self.retries = 0;
+            }
+            // A line still shown seconds after its answer was refused (a choice
+            // that needs parts it lacks): answer it again, another reply.
+            if self.answered.as_ref() == Some(&line) && tick >= self.answered_at + 375 {
+                self.answered = None;
+                self.retries += 1;
             }
             // Handed the choices, the seat answers a reply once per line:
             // the human's own answer when confirming, else the model's
@@ -767,6 +779,7 @@ impl AiSeat {
                 && tick >= self.skipped + SKIP_EVERY_TICKS
                 && let Some((index, why)) = pick_reply(replies, &self.says, policy)
             {
+                let index = if self.retries > 0 { replies.len() - 1 - (self.retries - 1) % replies.len() } else { index };
                 if self.consume_says
                     && let Some(phrase) = why.strip_prefix("the route says \"").and_then(|rest| rest.strip_suffix('"'))
                     && let Some(at) = self.says.iter().position(|said| said == phrase)
@@ -823,6 +836,7 @@ impl AiSeat {
                 }
                 self.skipped = tick;
                 self.answered = Some(key.clone());
+                self.answered_at = tick;
                 self.brain_wait = None;
                 self.reply = answer(self.reply, Pick::Reply(chosen.0 as u8));
                 self.log_decision(&label, replies, chosen.0, &chosen.1, &chosen.2, tick);
