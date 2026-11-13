@@ -455,6 +455,11 @@ impl Leader {
             info!(target: "ai_leader", "tick {tick} leading from {} through {} steps", self.module, self.steps.len());
         }
         let me = snapshot.body(SEAT).map(|body| body.position);
+        if tick % 250 == 0
+            && let (Some(at), Some(step)) = (me, self.steps.get(self.at))
+        {
+            info!(target: "ai_leader", "tick {tick} step {} {:?} at ({:.1}, {:.1}, {:.1})", self.at + 1, step, at[0], at[1], at[2]);
+        }
         if tick % (HZ * 3) == 0 {
             let ups = level_ups(world, snapshot);
             if !ups.is_empty() {
