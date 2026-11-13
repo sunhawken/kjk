@@ -138,6 +138,8 @@ pub struct Leader {
     door_pressed: u64,
     /// A closed door the walk is heading to open, the way to the step's goal being shut.
     door_goal: Option<u32>,
+    /// A stand short of an object no way leads to (index, feet, metres): the harness's `approach`.
+    stand_alt: Option<(u32, [f32; 3])>,
     /// The walk to the object under use, as a player's use key makes it.
     walk: Option<sim::target::Walk>,
     /// The end of the plan was logged.
@@ -203,6 +205,7 @@ impl Leader {
             module: String::new(),
             door_pressed: 0,
             door_goal: None,
+            stand_alt: None,
             walk: None,
             done_logged: false,
             party_screen: false,
@@ -243,6 +246,7 @@ impl Leader {
         self.loot = 0;
         self.walk = None;
         self.door_goal = None;
+        self.stand_alt = None;
         self.request.pin = Some(None);
         self.ai.set_lead(None);
     }
@@ -307,7 +311,13 @@ impl Leader {
             if level
                 .placed()
                 .get(number as usize)
-                .is_some_and(|object| object.kind == ObjectKind::Door && object.opens != sim::module::Opens::Never)
+                .is_some_and(|object| {
+                    object.kind == ObjectKind::Door
+                        && (object.opens != sim::module::Opens::Never
+                            // A locked door with a fail-to-open script is tried: the script may open it
+                            // (the playthrough's `to_try`).
+                            || object.scripts.iter().any(|(hook, _)| hook == "OnFailToOpen"))
+                })
                 && state.lock != sim::lock::LOCKED
             {
                 state.lock = sim::lock::UNLOCKED;
@@ -340,6 +350,42 @@ impl Leader {
         }
         if tick < self.last_press + PRESS_EVERY && self.pressed > 0 {
             return Some(Used::Waiting);
+        }
+        // No way leads to the object's own point (a footlocker's): a stand short
+        // of it that a way leads to, nearest the body first, then round it, as
+        // the playthrough's `approach` picks (kept while the walk lasts).
+        let mut spot = spot;
+        let leads = |at: [f32; 3]| {
+            let g = sim::math::scale(at, 1.0 / sim::motion::UNIT);
+            sim::walk::route_ways(level, ps.origin, [g[0], g[1], g[2] - sim::motion::SOLE_Z], &ways).is_some()
+        };
+        match self.stand_alt {
+            Some((kept, at)) if kept == index => spot.at = at,
+            _ => {
+                self.stand_alt = None;
+                if !leads(spot.at) {
+                    let feet = sim::target::feet_at(ps.origin);
+                    let d = sim::math::flat_distance(feet, spot.at).max(f32::EPSILON);
+                    let toward = [0.8f32, 1.6, 2.4].into_iter().filter(|step| *step < d).map(|step| {
+                        [
+                            spot.at[0] + (feet[0] - spot.at[0]) / d * step,
+                            spot.at[1] + (feet[1] - spot.at[1]) / d * step,
+                            spot.at[2],
+                        ]
+                    });
+                    let round = [0.8f32, 1.2, 1.6, 2.4].into_iter().flat_map(|far| {
+                        (0..8).map(move |k| {
+                            let angle = k as f32 * std::f32::consts::FRAC_PI_4;
+                            [spot.at[0] + far * angle.cos(), spot.at[1] + far * angle.sin(), spot.at[2]]
+                        })
+                    });
+                    if let Some(at) = toward.chain(round).find(|at| leads(*at)) {
+                        info!(target: "ai_leader", "tick {tick} no way to object {index}'s own point: a stand at {:?} instead", at);
+                        self.stand_alt = Some((index, at));
+                        spot.at = at;
+                    }
+                }
+            }
         }
         if self.walk.is_none() {
             if Walk::near(&ps, spot) {
