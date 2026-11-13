@@ -115,6 +115,9 @@ enum Used {
     Asked,
     /// Waiting for the last press to answer.
     Waiting,
+    /// The walk finds no way (the body stands off the walkable mesh): the
+    /// seat's own steering goes toward the object instead.
+    Stuck,
 }
 
 /// The leader's state across ticks.
@@ -366,7 +369,7 @@ impl Leader {
                     "tick {tick} the walk to object {index} cannot reach it: from {:?} to {:?} ({}); feet {:?} spot {:?}",
                     ps.origin, goal, sim::walk::why_none(level, ps.origin, [goal[0], goal[1], goal[2] - sim::motion::SOLE_Z]), sim::target::feet_at(ps.origin), spot.at
                 );
-                Some(Used::Asked)
+                Some(Used::Stuck)
             }
         }
     }
@@ -435,7 +438,7 @@ impl Leader {
                             return (Command::default(), actions);
                         }
                         Some(Used::Waiting) => return (Command::default(), actions),
-                        None => {}
+                        Some(Used::Stuck) | None => {}
                     }
                 }
                 self.ai.set_lead(Some(tag.clone()));
@@ -569,6 +572,10 @@ impl Leader {
                                 return (Command::default(), actions);
                             }
                             Used::Waiting => return (Command::default(), actions),
+                            Used::Stuck => {
+                                // No walk of its own: the seat's steering goes to it.
+                                self.ai.set_lead(Some(tag.clone()));
+                            }
                         }
                     } else if unlock {
                         // Nothing to unlock (it is not locked): on.
