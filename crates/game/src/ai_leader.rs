@@ -318,7 +318,7 @@ impl Leader {
                 .filter_map(|entity| match (entity.kind, entity.object) {
                     (sim::Kind::Object(ObjectKind::Door, number), Some(state)) if number != index && state.state == 0 => {
                         let near = flat(entity.position, me.position);
-                        (near < 2.2).then_some((number, near))
+                        (near < 3.5).then_some((number, near))
                     }
                     _ => None,
                 })
