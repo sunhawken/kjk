@@ -373,6 +373,26 @@ impl Leader {
                     "tick {tick} the walk to object {index} cannot reach it: from {:?} to {:?} ({}); feet {:?} spot {:?}",
                     ps.origin, goal, sim::walk::why_none(level, ps.origin, [goal[0], goal[1], goal[2] - sim::motion::SOLE_Z]), sim::target::feet_at(ps.origin), spot.at
                 );
+                // Which door, opened alone, would give a way (a diagnosis).
+                let to = [goal[0], goal[1], ps.origin[2]];
+                let all_open = |_: u32| sim::ObjectState { state: 1, ..Default::default() };
+                info!(target: "ai_leader", "route with every door open: {}", sim::walk::route(level, ps.origin, to, &all_open).is_some());
+                for probe in [[62.2f32, 90.0], [70.0, 85.0], [76.9, 84.0], [76.9, 79.0], [76.0, 76.0], [74.5, 74.5], [74.5, 72.9], [79.0, 70.0]] {
+                    let at = [probe[0] / sim::motion::UNIT, probe[1] / sim::motion::UNIT, ps.origin[2]];
+                    info!(target: "ai_leader", "route to {:?} (every door open): {}", probe, sim::walk::route(level, ps.origin, at, &all_open).is_some());
+                }
+                for entity in &snapshot.entities {
+                    if let sim::Kind::Object(ObjectKind::Door, number) = entity.kind {
+                        let only = |n: u32| {
+                            if n == number {
+                                sim::ObjectState { state: 1, ..Default::default() }
+                            } else {
+                                doors(n)
+                            }
+                        };
+                        info!(target: "ai_leader", "route with door {number} open: {}", sim::walk::route(level, ps.origin, to, &only).is_some());
+                    }
+                }
                 Some(Used::Stuck)
             }
         }
@@ -436,9 +456,14 @@ impl Leader {
                 {
                     self.ai.set_lead(None);
                     if let Some(door) = self.door_goal {
+                        info!(target: "ai_leader", "tick {tick} door goal {door}");
                         let closed = sim::target::entity(snapshot, door).and_then(|entity| entity.object).is_some_and(|state| state.state == 0);
                         if closed {
-                            match self.use_object(world, snapshot, door, false, false, tick, &mut actions) {
+                            let result = self.use_object(world, snapshot, door, false, false, tick, &mut actions);
+                            if tick >= self.began + 2 {
+                                info!(target: "ai_leader", "tick {tick} walking to shut door {door}: {}", match &result { Some(Used::Steer(c)) => format!("steer fwd {} right {}", c.forward, c.right), Some(Used::Asked) => "asked".into(), Some(Used::Waiting) => "waiting".into(), Some(Used::Stuck) => "stuck".into(), None => "none".into() });
+                            }
+                            match result {
                                 Some(Used::Steer(command)) => return (command, actions),
                                 Some(Used::Asked) | Some(Used::Waiting) => return (Command::default(), actions),
                                 Some(Used::Stuck) | None => self.door_goal = None,
@@ -464,12 +489,20 @@ impl Leader {
                                 .filter_map(|entity| match (entity.kind, entity.object) {
                                     (sim::Kind::Object(ObjectKind::Door, number), Some(state)) if number != index && state.state == 0 => {
                                         let near = flat(entity.position, me);
-                                        (near < 8.0).then_some((number, near))
+                                        (near < 14.0).then_some((number, near))
                                     }
                                     _ => None,
                                 })
                                 .min_by(|a, b| a.1.total_cmp(&b.1))
                                 .map(|(number, _)| number);
+                            info!(target: "ai_leader", "tick {tick} every way shut to {tag}: closed door near {door:?}");
+                            for entity in &snapshot.entities {
+                                if let (sim::Kind::Object(ObjectKind::Door, number), Some(state)) = (entity.kind, entity.object)
+                                    && let Some(object) = level.placed().get(number as usize)
+                                {
+                                    info!(target: "ai_leader", "door {number}: tag {:?} opens {:?} state {} lock {} at {:?}", object.tag, object.opens, state.state, state.lock, object.position);
+                                }
+                            }
                             if door.is_some() {
                                 self.door_goal = door;
                                 self.walk = None;
