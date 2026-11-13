@@ -438,7 +438,29 @@ impl Leader {
                             return (Command::default(), actions);
                         }
                         Some(Used::Waiting) => return (Command::default(), actions),
-                        Some(Used::Stuck) | None => {}
+                        Some(Used::Stuck) | None => {
+                            // Every way shut: the nearest closed door close by is
+                            // walked up to (to its use point) and opened.
+                            let door = snapshot
+                                .entities
+                                .iter()
+                                .filter_map(|entity| match (entity.kind, entity.object) {
+                                    (sim::Kind::Object(ObjectKind::Door, number), Some(state)) if number != index && state.state == 0 => {
+                                        let near = flat(entity.position, me);
+                                        (near < 8.0).then_some((number, near))
+                                    }
+                                    _ => None,
+                                })
+                                .min_by(|a, b| a.1.total_cmp(&b.1))
+                                .map(|(number, _)| number);
+                            if let Some(door) = door {
+                                match self.use_object(world, snapshot, door, false, false, tick, &mut actions) {
+                                    Some(Used::Steer(command)) => return (command, actions),
+                                    Some(Used::Asked) | Some(Used::Waiting) => return (Command::default(), actions),
+                                    Some(Used::Stuck) | None => {}
+                                }
+                            }
+                        }
                     }
                 }
                 self.ai.set_lead(Some(tag.clone()));
