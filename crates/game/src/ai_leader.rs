@@ -136,6 +136,8 @@ pub struct Leader {
     module: String,
     /// When a door on the way was last pressed.
     door_pressed: u64,
+    /// A closed door the walk is heading to open, the way to the step's goal being shut.
+    door_goal: Option<u32>,
     /// The walk to the object under use, as a player's use key makes it.
     walk: Option<sim::target::Walk>,
     /// The end of the plan was logged.
@@ -200,6 +202,7 @@ impl Leader {
             talk_seen: 0,
             module: String::new(),
             door_pressed: 0,
+            door_goal: None,
             walk: None,
             done_logged: false,
             party_screen: false,
@@ -239,6 +242,7 @@ impl Leader {
         self.talked = false;
         self.loot = 0;
         self.walk = None;
+        self.door_goal = None;
         self.request.pin = Some(None);
         self.ai.set_lead(None);
     }
@@ -431,6 +435,19 @@ impl Leader {
                     && matches!(object.kind, ObjectKind::Placeable | ObjectKind::Door)
                 {
                     self.ai.set_lead(None);
+                    if let Some(door) = self.door_goal {
+                        let closed = sim::target::entity(snapshot, door).and_then(|entity| entity.object).is_some_and(|state| state.state == 0);
+                        if closed {
+                            match self.use_object(world, snapshot, door, false, false, tick, &mut actions) {
+                                Some(Used::Steer(command)) => return (command, actions),
+                                Some(Used::Asked) | Some(Used::Waiting) => return (Command::default(), actions),
+                                Some(Used::Stuck) | None => self.door_goal = None,
+                            }
+                        } else {
+                            self.door_goal = None;
+                            self.walk = None;
+                        }
+                    }
                     match self.use_object(world, snapshot, index, false, true, tick, &mut actions) {
                         Some(Used::Steer(command)) => return (command, actions),
                         Some(Used::Asked) => {
@@ -453,12 +470,10 @@ impl Leader {
                                 })
                                 .min_by(|a, b| a.1.total_cmp(&b.1))
                                 .map(|(number, _)| number);
-                            if let Some(door) = door {
-                                match self.use_object(world, snapshot, door, false, false, tick, &mut actions) {
-                                    Some(Used::Steer(command)) => return (command, actions),
-                                    Some(Used::Asked) | Some(Used::Waiting) => return (Command::default(), actions),
-                                    Some(Used::Stuck) | None => {}
-                                }
+                            if door.is_some() {
+                                self.door_goal = door;
+                                self.walk = None;
+                                return (Command::default(), actions);
                             }
                         }
                     }
