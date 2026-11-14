@@ -159,6 +159,11 @@ pub(crate) fn page(
             text: format!("{}. {}", number + 1, objective.label).into_bytes(),
         }
     }));
+    // And the items that may be needed, starred (`quest::pickups`).
+    notes.extend(crate::quest::pickups(level.name()).into_iter().map(|pickup| MapNoteView {
+        at: map.point([pickup.at[0], pickup.at[1]]),
+        text: format!("* {}", pickup.label).into_bytes(),
+    }));
     Some(MapView {
         area,
         picture: picture(assets, module),

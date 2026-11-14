@@ -83,7 +83,7 @@ impl Plugin for FloatyViewPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (show, floor_labels, quest_markers)
+            (show, floor_labels, quest_markers, item_markers)
                 .chain()
                 .run_if(resource_exists::<PresentedSnapshot>)
                 .before(crate::ui_view::Stepped),
@@ -399,6 +399,69 @@ fn quest_markers(
         stacked: 0,
     });
 }
+
+/// The items that may be needed (`quest::pickups`), in the world: each of
+/// the nearest within `ITEM_SHOWN_M`, over where it lies on the screen.
+fn item_markers(
+    presented: Res<PresentedSnapshot>,
+    (swap, seat): (Option<Res<SceneSwap>>, Option<Res<OwnSeat>>),
+    cameras: Query<(&GlobalTransform, &Camera), SceneCamera>,
+    mut ui: ResMut<Ui>,
+    mut facts: ResMut<console::DumpFacts>,
+) {
+    let (Some(swap), Ok((place, camera))) = (swap, cameras.single()) else {
+        return;
+    };
+    let snapshot = presented.0.current();
+    let seat = seat.map_or(sim::Seat(0), |seat| seat.0);
+    let pickups = crate::quest::pickups(swap.level.name());
+    if facts.wanted() {
+        facts.0.insert(
+            "quest_items".into(),
+            serde_json::json!(pickups.iter().map(|p| format!("{} at ({:.1}, {:.1})", p.label, p.at[0], p.at[1])).collect::<Vec<_>>()),
+        );
+    }
+    if ui.stack.is_open() || snapshot.talk_for(seat).is_some() {
+        return;
+    }
+    let Some(me) = snapshot.body(seat) else {
+        return;
+    };
+    for pickup in pickups {
+        let metres = ((pickup.at[0] - me.position[0]).powi(2) + (pickup.at[1] - me.position[1]).powi(2)).sqrt();
+        if !(2.0..=ITEM_SHOWN_M).contains(&metres) {
+            continue;
+        }
+        let at = crate::scene::game_to_bevy() * Vec3::from_array([pickup.at[0], pickup.at[1], pickup.at[2] + 1.0]);
+        let Some(share) = camera
+            .world_to_viewport(place, at)
+            .ok()
+            .zip(camera.logical_viewport_size())
+            .map(|(at, size)| at / size)
+            .filter(|share| (0.04..=0.96).contains(&share.x) && (0.06..=0.94).contains(&share.y))
+            .filter(|_| place.affine().inverse().transform_point3(at).z < 0.0)
+        else {
+            continue;
+        };
+        let words = format!("* {} {:.0} m", pickup.label, metres);
+        if facts.wanted() {
+            facts.0.insert("quest_item_marker".into(), serde_json::json!({ "words": words, "over": [share.x, share.y - 0.03] }));
+        }
+        ui.vm.floaties.push(ui::vm::FloatyView {
+            text: words.into_bytes(),
+            color: ITEM_COLOR,
+            alpha: 1.0,
+            over: [share.x, share.y - 0.03],
+            stacked: 0,
+        });
+    }
+}
+
+/// How near an item's marker shows in the world (metres).
+const ITEM_SHOWN_M: f32 = 25.0;
+
+/// The item markers' colour: a cool cyan, apart from the quest's gold.
+const ITEM_COLOR: [f32; 3] = [0.45, 0.9, 1.0];
 
 /// The quest marker's colour: KOTOR's gold.
 const QUEST_COLOR: [f32; 3] = [1.0, 0.86, 0.25];

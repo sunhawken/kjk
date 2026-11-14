@@ -940,3 +940,11 @@ done when its door is open, its point or object reached, its fight over;
 a later step plainly done (a door open, a point reached) moves the
 objective on. `KJK_QUEST_MARKERS=0` turns it off. The routes are the
 light-side main way first, their branches after.
+
+Items that may be needed (`quest::pickups`): containers and creatures of the
+area holding an item the game marks plot, or whose tag names a key, spike,
+card, datapad, sample, disk, tome, holocron, medal, badge, ticket or fuse,
+and any container a route step uses. Cyan `* Computer Spike +4 (Footlocker)
+2 m` over each of the nearest six within 25 m, starred notes on the map
+page; one is dropped once the player has been up to the container, or to the
+creature's remains. The dump's `quest_items` and `quest_item_marker`.
