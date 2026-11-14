@@ -535,7 +535,13 @@ pub fn update(level: &sim::Level, snapshot: &Snapshot, seat: Seat) {
     let mut state = state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if state.level != level.name() {
         let name = std::mem::take(&mut state.level);
-        let at = state.at;
+        // Leaving an area by the exit the route names is that step done: left
+        // as it was, coming back (out of the cantina, say) pointed the player
+        // at the same door again, round and round.
+        let mut at = state.at;
+        if state.steps.get(at).is_some_and(|step| matches!(step.goal, Goal::Exit { .. })) {
+            at += 1;
+        }
         if !name.is_empty() {
             state.left.insert(name, at);
         }
