@@ -31,7 +31,12 @@ use crate::ai_seat::{AiSeat, Delegate};
 /// The leader's seat: the host's.
 const SEAT: Seat = Seat(0);
 /// Play time before a step is given up on.
-const STEP_LIMIT_S: u64 = 60;
+const STEP_LIMIT_S: u64 = 40;
+
+/// A step whose body has moved less than `STUCK_M` in `STUCK_S` seconds,
+/// with no talk or press to wait on, is given up on at once.
+const STUCK_S: u64 = 10;
+const STUCK_M: f32 = 0.5;
 /// Ticks per second of play (`sim::TICK_HZ`).
 const HZ: u64 = 125;
 /// A use is pressed again after this many ticks without an answer.
@@ -140,6 +145,8 @@ pub struct Leader {
     door_goal: Option<u32>,
     /// A stand short of an object no way leads to (index, feet, metres): the harness's `approach`.
     stand_alt: Option<(u32, [f32; 3])>,
+    /// Where the body was and since when (a step's stall).
+    stall: ([f32; 3], u64),
     /// The walk to the object under use, as a player's use key makes it.
     walk: Option<sim::target::Walk>,
     /// The end of the plan was logged.
@@ -206,6 +213,7 @@ impl Leader {
             door_pressed: 0,
             door_goal: None,
             stand_alt: None,
+            stall: ([0.0; 3], 0),
             walk: None,
             done_logged: false,
             party_screen: false,
@@ -494,6 +502,21 @@ impl Leader {
             self.ai.set_lead(None);
             return (self.ai.decide(level, snapshot, snapshot, texts, SEAT, tick), actions);
         };
+        // A step that has gone nowhere for a while is forced on.
+        if let Some(at) = me
+            && !matches!(step, Step::Fight(_) | Step::Talk | Step::Say(_))
+            && snapshot.talk_for(SEAT).is_none()
+            && !self.talked
+        {
+            let (kept_at, kept_tick) = self.stall;
+            if flat(kept_at, at) > STUCK_M || tick < kept_tick {
+                self.stall = (at, tick);
+            } else if tick >= kept_tick + STUCK_S * HZ && tick >= self.began + STUCK_S * HZ && self.pressed == 0 {
+                self.next(tick, "stuck: moving on");
+                self.stall = (at, tick);
+                return (Command::default(), actions);
+            }
+        }
         // A step that outlasts its time is given up on.
         if tick >= self.began + STEP_LIMIT_S * HZ && !matches!(step, Step::Fight(_)) {
             self.next(tick, "gave up: out of time");
