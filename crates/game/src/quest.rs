@@ -11,7 +11,9 @@
 //! point or object reached, a fight over. A step later than the current one
 //! that is plainly done (a door open, a point reached) moves it on, so a
 //! loaded save or a different order does not leave a marker behind the
-//! player. Off with `KJK_QUEST_MARKERS=0`.
+//! player. Off with `KJK_QUEST_MARKERS=0`. Only the main quest's own steps are
+//! shown; `KJK_QUEST_FILL=1` adds an area's talkers and exits where the routes
+//! say little, `KJK_QUEST_ITEMS=1` the starred items that may be needed.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -582,7 +584,8 @@ pub fn update(level: &sim::Level, snapshot: &Snapshot, seat: Seat) {
     // An area the routes name nothing of: its talkers and exits, the nearest
     // first, so the player still has somewhere to be pointed.
     // Or, where the routes give only a little, filled out with them.
-    let ahead = if ahead.len() < 3 {
+    // Off unless `KJK_QUEST_FILL=1`: only the main quest's own steps are shown.
+    let ahead = if ahead.len() < 3 && std::env::var("KJK_QUEST_FILL").is_ok_and(|value| value == "1") {
         let mut all = ahead;
         for objective in fallback(level, snapshot, me) {
             if all.len() < ON_MAP && all.iter().all(|have| flat(have.at, objective.at) > 1.0) {
@@ -598,7 +601,9 @@ pub fn update(level: &sim::Level, snapshot: &Snapshot, seat: Seat) {
     // player has been up to it (a container) or to its remains (a creature).
     let mut found = Vec::new();
     let mut taken = Vec::new();
-    for stash in &state.stashes {
+    // Off unless `KJK_QUEST_ITEMS=1`: items are not main-quest objectives.
+    let items = std::env::var("KJK_QUEST_ITEMS").is_ok_and(|value| value == "1");
+    for stash in state.stashes.iter().filter(|_| items) {
         if state.taken.contains(&stash.number) {
             continue;
         }
