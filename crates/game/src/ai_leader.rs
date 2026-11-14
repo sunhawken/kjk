@@ -53,6 +53,8 @@ const TALK_OVER: u64 = HZ * 2;
 /// One step of the plan.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Step {
+    /// Wait for the area to change to this one (the story's own transition).
+    Module(String),
     To(String),
     Use(String, usize),
     Exit(String),
@@ -97,6 +99,7 @@ pub fn parse(text: &str) -> Vec<Step> {
                     _ => Step::Skipped(line.to_string()),
                 }
             }
+            "module" if !rest.is_empty() => Step::Module(rest.to_string()),
             "equip" => Step::Equip(if rest.is_empty() { None } else { Some(rest.to_ascii_lowercase()) }),
             "leader" if rest == "player" => Step::Leader(None),
             "leader" => match rest.parse() {
@@ -145,6 +148,10 @@ pub struct Leader {
     door_goal: Option<u32>,
     /// A stand short of an object no way leads to (index, feet, metres): the harness's `approach`.
     stand_alt: Option<(u32, [f32; 3])>,
+    /// The last use done, and the tries to use it again while the area has not changed.
+    last_use: Option<(String, usize)>,
+    module_retries: u32,
+    last_retry: u64,
     /// Where the body was and since when (a step's stall).
     stall: ([f32; 3], u64),
     /// The walk to the object under use, as a player's use key makes it.
@@ -213,6 +220,9 @@ impl Leader {
             door_pressed: 0,
             door_goal: None,
             stand_alt: None,
+            last_use: None,
+            module_retries: 0,
+            last_retry: 0,
             stall: ([0.0; 3], 0),
             walk: None,
             done_logged: false,
@@ -246,6 +256,12 @@ impl Leader {
 
     fn next(&mut self, tick: u64, why: &str) {
         info!(target: "ai_leader", "tick {tick} step {} {:?} done ({why})", self.at + 1, self.steps.get(self.at));
+        if let Some(Step::Use(tag, nth)) = self.steps.get(self.at) {
+            self.last_use = Some((tag.clone(), *nth));
+        }
+        if matches!(self.steps.get(self.at), Some(Step::Module(_))) {
+            self.module_retries = 0;
+        }
         self.at += 1;
         self.began = tick;
         self.pressed = 0;
@@ -504,7 +520,7 @@ impl Leader {
         };
         // A step that has gone nowhere for a while is forced on.
         if let Some(at) = me
-            && !matches!(step, Step::Fight(_) | Step::Talk | Step::Say(_))
+            && !matches!(step, Step::Fight(_) | Step::Talk | Step::Say(_) | Step::Module(_))
             && snapshot.talk_for(SEAT).is_none()
             && !self.talked
         {
@@ -518,7 +534,7 @@ impl Leader {
             }
         }
         // A step that outlasts its time is given up on.
-        if tick >= self.began + STEP_LIMIT_S * HZ && !matches!(step, Step::Fight(_)) {
+        if tick >= self.began + STEP_LIMIT_S * HZ && !matches!(step, Step::Fight(_) | Step::Module(_)) {
             self.next(tick, "gave up: out of time");
             return (Command::default(), actions);
         }
@@ -746,6 +762,32 @@ impl Leader {
                     }
                 } else if tick >= self.began + 3 * HZ {
                     self.next(tick, "no such object here");
+                    return (Command::default(), actions);
+                }
+            }
+            Step::Module(name) => {
+                if level.name().eq_ignore_ascii_case(name) {
+                    self.module = level.name().to_string();
+                    self.next(tick, "the area is reached");
+                    return (Command::default(), actions);
+                }
+                // The story's transition has not come: the last use again (a
+                // pod whose second talk waits on another press).
+                if !in_talk && tick >= self.began + 8 * HZ && tick >= self.last_retry + 8 * HZ && self.module_retries < 4 {
+                    if let Some((tag, nth)) = self.last_use.clone() {
+                        self.module_retries += 1;
+                        self.last_retry = tick;
+                        info!(target: "ai_leader", "tick {tick} {name} has not come: using {tag} again");
+                        self.steps.insert(self.at, Step::Use(tag, nth));
+                        self.began = tick;
+                        self.pressed = 0;
+                        self.last_press = 0;
+                        self.talked = false;
+                        return (Command::default(), actions);
+                    }
+                }
+                if tick >= self.began + 120 * HZ {
+                    self.next(tick, "gave up: the area did not come");
                     return (Command::default(), actions);
                 }
             }
