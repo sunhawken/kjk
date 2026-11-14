@@ -172,17 +172,53 @@ fn tag_of(goal: &Goal) -> Option<&str> {
     }
 }
 
+/// How many stretches of the routes name each tag (lowercase): a tag many
+/// stretches name is a prop every area has (a footlocker, a computer panel,
+/// a plain exit door), not one that tells the areas apart.
+fn spread() -> &'static HashMap<String, usize> {
+    static SPREAD: OnceLock<HashMap<String, usize>> = OnceLock::new();
+    SPREAD.get_or_init(|| {
+        let mut stretches: HashMap<String, std::collections::HashSet<usize>> = HashMap::new();
+        for step in steps() {
+            if let Some(tag) = tag_of(&step.goal) {
+                stretches.entry(tag.to_ascii_lowercase()).or_default().insert(step.stretch);
+            }
+        }
+        stretches.into_iter().map(|(tag, set)| (tag, set.len())).collect()
+    })
+}
+
+/// A tag that tells areas apart: named by few stretches.
+const DISTINCTIVE_MOST: usize = 4;
+
+fn distinctive(tag: &str) -> bool {
+    spread().get(&tag.to_ascii_lowercase()).is_none_or(|count| *count <= DISTINCTIVE_MOST)
+}
+
 /// The steps that apply in `level`: those in the stretches most of whose
 /// named objects stand in it, in story order.
 fn applicable(level: &sim::Level) -> Vec<Step> {
     let mut named: HashMap<usize, (usize, usize)> = HashMap::new();
     for step in steps() {
-        if let Some(tag) = tag_of(&step.goal) {
+        if let Some(tag) = tag_of(&step.goal).filter(|tag| distinctive(tag)) {
             let entry = named.entry(step.stretch).or_default();
             entry.1 += 1;
             if level.placed().iter().any(|object| object.tag.eq_ignore_ascii_case(tag)) {
                 entry.0 += 1;
             }
+        }
+    }
+    if std::env::var("KJK_QUEST_DEBUG").is_ok() {
+        let mut shown: Vec<_> = named.iter().filter(|(_, (found, _))| *found > 0).collect();
+        shown.sort();
+        for (stretch, (found, all)) in shown {
+            let here: Vec<&str> = steps()
+                .iter()
+                .filter(|step| step.stretch == *stretch)
+                .filter_map(|step| tag_of(&step.goal))
+                .filter(|tag| level.placed().iter().any(|object| object.tag.eq_ignore_ascii_case(tag)))
+                .collect();
+            bevy::log::info!(target: "quest", "{}: stretch {stretch} names {found} of {all} here: {here:?}", level.name());
         }
     }
     steps()
@@ -356,6 +392,41 @@ fn short(words: &str) -> String {
     out
 }
 
+/// Where an area the routes say nothing of leads the player on: up to three
+/// creatures that talk (not in the party, alive) and three ways out, nearest
+/// first, the talkers before the exits.
+fn fallback(level: &sim::Level, snapshot: &Snapshot, me: [f32; 3]) -> Vec<Objective> {
+    let mut talkers: Vec<Objective> = Vec::new();
+    let mut exits: Vec<Objective> = Vec::new();
+    for (number, object) in level.placed().iter().enumerate() {
+        let entity = sim::target::entity(snapshot, number as u32);
+        let at = entity.map_or(object.position, |entity| entity.position);
+        match object.kind {
+            ObjectKind::Creature if !object.conversation.is_empty() => {
+                let alive = entity.is_some_and(|entity| {
+                    !snapshot.in_party(entity) && entity.fighter.as_ref().is_some_and(|fighter| fighter.alive())
+                });
+                if alive {
+                    let name = if object.name.is_empty() { object.tag.clone() } else { object.name.clone() };
+                    talkers.push(Objective { at, label: format!("Talk to {name}") });
+                }
+            }
+            ObjectKind::Door | ObjectKind::Trigger => {
+                if let Some(link) = &object.link {
+                    exits.push(Objective { at, label: format!("Way out to {}", link.module) });
+                }
+            }
+            _ => {}
+        }
+    }
+    let nearest = |all: &mut Vec<Objective>| all.sort_by(|a, b| flat(a.at, me).total_cmp(&flat(b.at, me)));
+    nearest(&mut talkers);
+    nearest(&mut exits);
+    talkers.truncate(3);
+    exits.truncate(3);
+    talkers.into_iter().chain(exits).collect()
+}
+
 /// Follows the player through the area's objectives: the current one and the
 /// few after it. Called each frame from the world's view.
 pub fn update(level: &sim::Level, snapshot: &Snapshot, seat: Seat) {
@@ -414,6 +485,9 @@ pub fn update(level: &sim::Level, snapshot: &Snapshot, seat: Seat) {
             bevy::log::info!(target: "quest", "objective {} at ({:.1}, {:.1}) in {} ({} more)", first.label, first.at[0], first.at[1], level.name(), ahead.len() - 1);
         }
     }
+    // An area the routes name nothing of: its talkers and exits, the nearest
+    // first, so the player still has somewhere to be pointed.
+    let ahead = if ahead.is_empty() && state.steps.is_empty() { fallback(level, snapshot, me) } else { ahead };
     state.ahead = ahead;
     // What may be needed and not yet gathered: gone from the list once the
     // player has been up to it (a container) or to its remains (a creature).
