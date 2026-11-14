@@ -193,8 +193,39 @@ fn applicable(level: &sim::Level) -> Vec<Step> {
         .collect()
 }
 
+/// Something that may be needed lying in the area: items carried by a
+/// container or a creature.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pickup {
+    /// Game space, metres.
+    pub at: [f32; 3],
+    /// What it is and where: "Computer Spikes (footlocker)".
+    pub label: String,
+}
+
+/// An object of the area holding items that may be needed, as the area's
+/// data has it.
+struct Stash {
+    number: u32,
+    kind: ObjectKind,
+    label: String,
+}
+
+/// Words in an item's tag or template that mark one a quest may ask for.
+const NEEDED_WORDS: &[&str] = &[
+    "key", "spike", "card", "datapad", "sample", "disk", "tome", "holocron", "medal", "badge", "ticket", "fuse",
+];
+
+/// How many pickups to keep, nearest first.
+const PICKUPS: usize = 6;
+
 #[derive(Default)]
 struct State {
+    /// The area's holders of items that may be needed, and those the player
+    /// has been up to.
+    stashes: Vec<Stash>,
+    taken: std::collections::HashSet<u32>,
+    pickups: Vec<Pickup>,
     level: String,
     steps: Vec<Step>,
     /// The current step, by index into `steps`.
@@ -203,6 +234,55 @@ struct State {
     left: HashMap<String, usize>,
     /// The objectives to come from the current one, resolved.
     ahead: Vec<Objective>,
+}
+
+/// The area's holders of items that may be needed: an item the game marks
+/// plot or whose tag names a key, spike, card or the like, or any container
+/// a walkthrough step uses.
+fn scan(level: &sim::Level, steps: &[Step]) -> Vec<Stash> {
+    let library = level.scripts();
+    let routed: Vec<&str> = steps
+        .iter()
+        .filter_map(|step| match &step.goal {
+            Goal::Use { tag, .. } => Some(tag.as_str()),
+            _ => None,
+        })
+        .collect();
+    level
+        .placed()
+        .iter()
+        .enumerate()
+        .filter(|(_, object)| matches!(object.kind, ObjectKind::Placeable | ObjectKind::Creature) && !object.inventory.is_empty())
+        .filter_map(|(number, object)| {
+            let names: Vec<String> = object
+                .inventory
+                .iter()
+                .filter_map(|held| {
+                    let facts = library.and_then(|library| library.items().get(&held.template));
+                    let tag = facts.map_or(held.template.to_ascii_lowercase(), |facts| facts.tag.to_ascii_lowercase());
+                    let words = NEEDED_WORDS.iter().any(|word| tag.contains(word) || held.template.contains(word));
+                    let plot = facts.is_some_and(|facts| facts.plot);
+                    (plot || words).then(|| {
+                        facts
+                            .and_then(|facts| library.and_then(|library| library.text(facts.name)))
+                            .filter(|text| !text.trim().is_empty())
+                            .unwrap_or_else(|| held.template.clone())
+                    })
+                })
+                .collect();
+            let wanted = routed.iter().any(|tag| object.tag.eq_ignore_ascii_case(tag));
+            if names.is_empty() && !(wanted && object.kind == ObjectKind::Placeable) {
+                return None;
+            }
+            let holder = if object.name.is_empty() { object.tag.clone() } else { object.name.clone() };
+            let what = match names.as_slice() {
+                [] => "Items".to_string(),
+                [one] => one.clone(),
+                [first, rest @ ..] => format!("{first} +{}", rest.len()),
+            };
+            Some(Stash { number: number as u32, kind: object.kind, label: format!("{what} ({holder})") })
+        })
+        .collect()
 }
 
 fn state() -> &'static Mutex<State> {
@@ -295,6 +375,8 @@ pub fn update(level: &sim::Level, snapshot: &Snapshot, seat: Seat) {
         state.level = level.name().to_string();
         state.steps = applicable(level);
         state.at = state.left.get(&state.level).copied().unwrap_or(0).min(state.steps.len());
+        state.stashes = scan(level, &state.steps);
+        state.taken.clear();
     }
     // On past what is done, and past a step plainly done a little further.
     let mut guard = 0;
@@ -333,6 +415,30 @@ pub fn update(level: &sim::Level, snapshot: &Snapshot, seat: Seat) {
         }
     }
     state.ahead = ahead;
+    // What may be needed and not yet gathered: gone from the list once the
+    // player has been up to it (a container) or to its remains (a creature).
+    let mut found = Vec::new();
+    let mut taken = Vec::new();
+    for stash in &state.stashes {
+        if state.taken.contains(&stash.number) {
+            continue;
+        }
+        let entity = sim::target::entity(snapshot, stash.number);
+        let Some(at) = entity.map(|entity| entity.position).or_else(|| level.placed().get(stash.number as usize).map(|object| object.position)) else {
+            continue;
+        };
+        let dead = entity.is_some_and(|entity| entity.fighter.as_ref().is_some_and(|fighter| !fighter.alive()));
+        let near = flat(at, me);
+        let reached = near <= if stash.kind == ObjectKind::Creature { ARRIVED_M } else { 2.0 };
+        if reached && (stash.kind != ObjectKind::Creature || dead) {
+            taken.push(stash.number);
+            continue;
+        }
+        found.push((near, Pickup { at, label: stash.label.clone() }));
+    }
+    state.taken.extend(taken);
+    found.sort_by(|a, b| a.0.total_cmp(&b.0));
+    state.pickups = found.into_iter().take(PICKUPS).map(|(_, pickup)| pickup).collect();
 }
 
 /// The objectives to come in the area `level` names (the current one first),
@@ -340,6 +446,13 @@ pub fn update(level: &sim::Level, snapshot: &Snapshot, seat: Seat) {
 pub fn upcoming(level: &str) -> Vec<Objective> {
     let state = state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if state.level == level { state.ahead.clone() } else { Vec::new() }
+}
+
+/// The items that may be needed lying in the area `level` names, nearest
+/// first, as last followed.
+pub fn pickups(level: &str) -> Vec<Pickup> {
+    let state = state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if state.level == level { state.pickups.clone() } else { Vec::new() }
 }
 
 #[cfg(test)]
