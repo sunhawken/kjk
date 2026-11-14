@@ -147,7 +147,7 @@ pub fn run(options: RunOptions) -> AppExit {
             // A fast AI run (`KJK_SIM_SPEED`) takes frames as fast as they come, each
             // a few ticks (`KJK_SIM_CAP`): the render side's walks and presses
             // act once a frame.
-            if std::env::var("KJK_SIM_SPEED").is_ok() { 1.0 / 1000.0 } else { 1.0 / 60.0 },
+            if std::env::var("KJK_SIM_SPEED").is_ok() { 1.0 / 60.0 } else { 1.0 / 60.0 },
         )));
     } else {
         app.add_plugins(DefaultPlugins.set(log).set(WindowPlugin {
