@@ -350,7 +350,19 @@ struct State {
     left: HashMap<String, usize>,
     /// The objectives to come from the current one, resolved.
     ahead: Vec<Objective>,
+    /// The step the player has been standing at, and since when (sim ms): a
+    /// step stood at for `DWELL_MS` is done, whatever the world says (an
+    /// object used from further off than the step's own reach, say), so no
+    /// marker holds the player to it for good.
+    dwell: Option<(usize, u64)>,
+    /// The sim time last seen: it running back means a new game or a load.
+    last_ms: u64,
 }
+
+/// How near (metres) and how long (ms) the player stands at a step before it
+/// counts as done.
+const DWELL_M: f32 = 4.0;
+const DWELL_MS: u64 = 6000;
 
 /// The area's holders of items that may be needed: an item the game marks
 /// plot or whose tag names a key, spike, card or the like, or any container
@@ -533,6 +545,12 @@ pub fn update(level: &sim::Level, snapshot: &Snapshot, seat: Seat) {
         return;
     };
     let mut state = state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    // A new game or a load runs the clock back: what was followed is not this
+    // game's, and its saved places would hold the markers where they were.
+    if snapshot.time_ms < state.last_ms {
+        *state = State::default();
+    }
+    state.last_ms = snapshot.time_ms;
     if state.level != level.name() {
         let name = std::mem::take(&mut state.level);
         // Leaving an area by the exit the route names is that step done: left
@@ -561,6 +579,26 @@ pub fn update(level: &sim::Level, snapshot: &Snapshot, seat: Seat) {
         match read(level, snapshot, me, step) {
             Some((_, true, _)) | None => state.at += 1,
             Some(_) => break,
+        }
+    }
+    // A step stood at for a while is done (see `State::dwell`).
+    if let Some(step) = state.steps.get(state.at) {
+        // A door is done when it is open, and a locked one is not to be passed over.
+        let door = tag_of(&step.goal)
+            .and_then(|tag| find(level, tag, 1, me))
+            .is_some_and(|(_, _, kind)| kind == ObjectKind::Door);
+        let standing = !door
+            && !matches!(step.goal, Goal::Exit { .. } | Goal::Fight | Goal::Unlock { .. })
+            && read(level, snapshot, me, step).is_some_and(|(objective, done, _)| !done && flat(objective.at, me) <= DWELL_M);
+        match (standing, state.dwell) {
+            (true, Some((index, since))) if index == state.at => {
+                if snapshot.time_ms.saturating_sub(since) >= DWELL_MS {
+                    state.at += 1;
+                    state.dwell = None;
+                }
+            }
+            (true, _) => state.dwell = Some((state.at, snapshot.time_ms)),
+            (false, _) => state.dwell = None,
         }
     }
     let from = state.at;
