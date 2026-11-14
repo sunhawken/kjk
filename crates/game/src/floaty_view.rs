@@ -83,7 +83,7 @@ impl Plugin for FloatyViewPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (show, floor_labels)
+            (show, floor_labels, quest_markers)
                 .chain()
                 .run_if(resource_exists::<PresentedSnapshot>)
                 .before(crate::ui_view::Stepped),
@@ -309,3 +309,96 @@ const BAD_STRREF: &[u8] = b"BAD STRREF";
 /// The colour feedback floats in [verify: KOTOR's `CSWCObject` feedback
 /// colour; white here].
 const FEEDBACK_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
+
+/// The quest's markers in the world (`quest`): the current objective's words
+/// and how far it is, over it where it is on the screen, else at the
+/// window's edge with an arrow to turn toward it.
+fn quest_markers(
+    presented: Res<PresentedSnapshot>,
+    (swap, seat): (Option<Res<SceneSwap>>, Option<Res<OwnSeat>>),
+    cameras: Query<(&GlobalTransform, &Camera), SceneCamera>,
+    mut ui: ResMut<Ui>,
+    mut facts: ResMut<console::DumpFacts>,
+) {
+    let (Some(swap), Ok((place, camera))) = (swap, cameras.single()) else {
+        return;
+    };
+    let snapshot = presented.0.current();
+    let seat = seat.map_or(sim::Seat(0), |seat| seat.0);
+    crate::quest::update(&swap.level, snapshot, seat);
+    // Not over a screen, a conversation or a cutscene.
+    if ui.stack.is_open() || snapshot.talk_for(seat).is_some() {
+        return;
+    }
+    let (Some(objective), Some(me)) = (
+        crate::quest::upcoming(swap.level.name()).into_iter().next(),
+        snapshot.body(seat),
+    ) else {
+        return;
+    };
+    let metres = ((objective.at[0] - me.position[0]).powi(2) + (objective.at[1] - me.position[1]).powi(2)).sqrt();
+    // Close at hand, the marker is not needed.
+    if metres < 2.0 {
+        return;
+    }
+    let at = crate::scene::game_to_bevy() * Vec3::from_array([objective.at[0], objective.at[1], objective.at[2] + 1.2]);
+    if facts.wanted() {
+        facts.0.insert(
+            "quest".into(),
+            serde_json::json!({
+                "objectives": crate::quest::upcoming(swap.level.name()).iter().map(|o| format!("{} at ({:.1}, {:.1})", o.label, o.at[0], o.at[1])).collect::<Vec<_>>(),
+            }),
+        );
+    }
+    let share = camera
+        .world_to_viewport(place, at)
+        .ok()
+        .zip(camera.logical_viewport_size())
+        .map(|(at, size)| at / size)
+        .filter(|share| (0.04..=0.96).contains(&share.x) && (0.06..=0.94).contains(&share.y));
+    let behind = place.affine().inverse().transform_point3(at).z > 0.0;
+    let (over, arrow) = match share {
+        Some(share) if !behind => ([share.x, share.y - 0.03], "v"),
+        _ => {
+            // Toward it from the middle of the screen, at the window's edge.
+            let local = place.affine().inverse().transform_point3(at);
+            let (mut dx, mut dy) = (local.x, -local.y);
+            if behind {
+                dx = if dx == 0.0 { 1.0 } else { -dx };
+            }
+            let length = (dx * dx + dy * dy).sqrt().max(1e-4);
+            (dx, dy) = (dx / length, dy / length);
+            let scale = (0.40 / dx.abs().max(1e-4)).min(0.40 / dy.abs().max(1e-4));
+            let arrow = if dx.abs() > dy.abs() {
+                if dx < 0.0 { "<<" } else { ">>" }
+            } else if dy < 0.0 {
+                "^"
+            } else {
+                "v"
+            };
+            ([0.5 + dx * scale, 0.5 + dy * scale], arrow)
+        }
+    };
+    let words = if arrow == "<<" || arrow == ">>" || arrow == "^" {
+        match arrow {
+            "<<" => format!("<< {} {:.0} m", objective.label, metres),
+            ">>" => format!("{} {:.0} m >>", objective.label, metres),
+            _ => format!("^ {} {:.0} m", objective.label, metres),
+        }
+    } else {
+        format!("v {} {:.0} m", objective.label, metres)
+    };
+    if facts.wanted() {
+        facts.0.insert("quest_marker".into(), serde_json::json!({ "words": words, "over": over }));
+    }
+    ui.vm.floaties.push(ui::vm::FloatyView {
+        text: words.into_bytes(),
+        color: QUEST_COLOR,
+        alpha: 1.0,
+        over,
+        stacked: 0,
+    });
+}
+
+/// The quest marker's colour: KOTOR's gold.
+const QUEST_COLOR: [f32; 3] = [1.0, 0.86, 0.25];
