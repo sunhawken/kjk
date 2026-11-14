@@ -337,6 +337,15 @@ fn quest_markers(
     let snapshot = presented.0.current();
     let seat = seat.map_or(sim::Seat(0), |seat| seat.0);
     crate::quest::update(&swap.level, snapshot, seat);
+    // The dump shows the objectives whatever the screen.
+    if facts.wanted() {
+        facts.0.insert(
+            "quest".into(),
+            serde_json::json!({
+                "objectives": crate::quest::upcoming(swap.level.name()).iter().map(|o| format!("{} at ({:.1}, {:.1})", o.label, o.at[0], o.at[1])).collect::<Vec<_>>(),
+            }),
+        );
+    }
     // Not over a screen, a conversation or a cutscene.
     if ui.stack.is_open() || snapshot.talk_for(seat).is_some() {
         return;
@@ -353,14 +362,6 @@ fn quest_markers(
         return;
     }
     let at = crate::scene::game_to_bevy() * Vec3::from_array([objective.at[0], objective.at[1], objective.at[2] + 1.2]);
-    if facts.wanted() {
-        facts.0.insert(
-            "quest".into(),
-            serde_json::json!({
-                "objectives": crate::quest::upcoming(swap.level.name()).iter().map(|o| format!("{} at ({:.1}, {:.1})", o.label, o.at[0], o.at[1])).collect::<Vec<_>>(),
-            }),
-        );
-    }
     let share = camera
         .world_to_viewport(place, at)
         .ok()
