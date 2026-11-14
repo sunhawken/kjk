@@ -2023,6 +2023,11 @@ fn advance(
                 if let Some(module) = &request.warp {
                     authority.world.warp(module);
                 }
+                if !request.run.is_empty()
+                    && let Err(error) = crate::by_hand::queue_scripts(&mut authority.world, &request.run)
+                {
+                    warn!(target: "ai_leader", "scripts for the arrival: {error}");
+                }
                 if let (Some(pin), Some(pinned)) = (request.pin, pinned.as_deref_mut()) {
                     pinned.0 = pin;
                 }

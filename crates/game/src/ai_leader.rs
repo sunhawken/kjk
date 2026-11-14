@@ -151,6 +151,8 @@ pub struct Leader {
     /// The last use done, and the tries to use it again while the area has not changed.
     last_use: Option<(String, usize)>,
     module_retries: u32,
+    /// The area was reached by a skip, not by the story.
+    warped: bool,
     last_retry: u64,
     /// Where the body was and since when (a step's stall).
     stall: ([f32; 3], u64),
@@ -182,6 +184,17 @@ pub struct Request {
     pub defer: bool,
     /// Skip a scene that is not play: go to this area now.
     pub warp: Option<String>,
+    /// Scripts to run for the player now (what the skipped scene would have set going).
+    pub run: Vec<String>,
+}
+
+/// The scripts a skipped scene would have started in the area it leads to.
+fn arrival_scripts(module: &str) -> &'static [&'static str] {
+    match module.to_ascii_lowercase().as_str() {
+        // The Endar Spire's escape: Carth wakes by the player's bed.
+        "tar_m02af" | "tar_m02aa" => &["k_ptar_carth01x"],
+        _ => &[],
+    }
 }
 
 impl Leader {
@@ -224,6 +237,7 @@ impl Leader {
             stand_alt: None,
             last_use: None,
             module_retries: 0,
+            warped: false,
             last_retry: 0,
             stall: ([0.0; 3], 0),
             walk: None,
@@ -770,6 +784,11 @@ impl Leader {
             Step::Module(name) => {
                 if level.name().eq_ignore_ascii_case(name) {
                     self.module = level.name().to_string();
+                    // What the scene skipped on the way would have started here.
+                    if self.warped {
+                        self.request.run = arrival_scripts(name).iter().map(|script| script.to_string()).collect();
+                        self.warped = false;
+                    }
                     self.next(tick, "the area is reached");
                     return (Command::default(), actions);
                 }
@@ -792,6 +811,7 @@ impl Leader {
                     }
                     info!(target: "ai_leader", "tick {tick} {name} has not come from {}: skipping the scene", level.name());
                     self.request.warp = Some(name.clone());
+                    self.warped = true;
                 }
                 if tick >= self.began + 120 * HZ {
                     self.next(tick, "gave up: the area did not come");
