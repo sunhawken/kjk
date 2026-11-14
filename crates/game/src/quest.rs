@@ -469,6 +469,43 @@ mod tests {
     }
 
     #[test]
+    fn stretches_only_grow_and_goals_are_sane() {
+        let all = steps();
+        let mut last = 0;
+        for step in all {
+            assert!(step.stretch >= last, "{step:?}");
+            last = step.stretch;
+            match &step.goal {
+                Goal::At { x, y } => assert!(x.is_finite() && y.is_finite(), "{step:?}"),
+                Goal::Use { tag, nth } => assert!(!tag.is_empty() && *nth >= 1, "{step:?}"),
+                Goal::To { tag } | Goal::Exit { tag } | Goal::Unlock { tag } => assert!(!tag.is_empty(), "{step:?}"),
+                Goal::Fight => {}
+            }
+        }
+    }
+
+    #[test]
+    fn every_route_gives_steps() {
+        for (number, text) in ROUTES.iter().enumerate() {
+            assert!(
+                text.lines().any(|line| {
+                    let verb = line.split('#').next().unwrap_or("").split_whitespace().next().unwrap_or("");
+                    matches!(verb, "use" | "to" | "exit" | "at")
+                }),
+                "route {number} has no objective steps"
+            );
+        }
+    }
+
+    #[test]
+    fn short_never_panics_on_odd_words() {
+        for words in ["", "   ", "(", ":", "é".repeat(200).as_str(), "a;b:c(d", "日本語のテキスト", "x".repeat(1000).as_str()] {
+            let out = short(words);
+            assert!(!out.is_empty() && out.chars().count() <= 48, "{words:?} -> {out:?}");
+        }
+    }
+
+    #[test]
     fn short_keeps_the_first_clause() {
         assert_eq!(short("the pods' door (Carth behind it)"), "the pods' door");
         assert_eq!(short(""), "Next objective");
