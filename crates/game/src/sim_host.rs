@@ -1140,6 +1140,7 @@ pub(crate) fn player_command(
         holds: [
             (held(Action::Block), sim::holds::BLOCK),
             (held(Action::Kick), sim::holds::KICK),
+            (held(Action::Sprint), sim::holds::SPRINT),
         ]
         .iter()
         .filter(|(on, _)| *on)

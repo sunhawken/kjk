@@ -591,6 +591,9 @@ impl Move<'_, '_> {
         {
             speed *= rules::movement::ground::BACKWARD;
         }
+        if self.cmd.buttons & buttons::WALKING == 0 && self.cmd.holds & crate::input::holds::SPRINT != 0 {
+            speed *= crate::input::SPRINT_SCALE;
+        }
         speed = self.saber_speed(speed);
 
         let legs = self.ps.legs;

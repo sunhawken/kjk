@@ -614,7 +614,8 @@ pub(super) fn move_actors(
                 } else {
                     crate::combat::effects::kotor_multiplier(&fighting.0, ja, clock.time_ms)
                 };
-                let speed = walk::kotor_speed(rates, multiplier, run);
+                let speed = walk::kotor_speed(rates, multiplier, run)
+                    * if run && command.holds & crate::input::holds::SPRINT != 0 { crate::input::SPRINT_SCALE } else { 1.0 };
                 // Out of its fight lately, it eases down from JA's.
                 let left = fighting.0.combat_until.max(fighting.0.saber.out_until);
                 let keep = match left {
@@ -703,6 +704,7 @@ pub(super) fn move_actors(
             let run = command.buttons & buttons::WALKING == 0;
             let speed = if moves {
                 walk::kotor_speed(rates, multiplier, run)
+                    * if run && command.holds & crate::input::holds::SPRINT != 0 { crate::input::SPRINT_SCALE } else { 1.0 }
             } else {
                 0.0
             };

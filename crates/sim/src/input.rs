@@ -119,7 +119,12 @@ pub mod holds {
     pub const BLOCK: u8 = 1;
     /// Kick with any weapon in hand, on a press (the duel modes).
     pub const KICK: u8 = 1 << 1;
+    /// Run three times as fast while held (a sprint key; moving, not walking).
+    pub const SPRINT: u8 = 1 << 2;
 }
+
+/// How much faster a sprint runs.
+pub const SPRINT_SCALE: f32 = 3.0;
 
 /// How many seats there can be: every value of a `Seat`.
 pub const SEATS: usize = 256;

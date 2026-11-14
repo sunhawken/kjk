@@ -106,11 +106,13 @@ pub enum Action {
     EndCall,
     /// Make a bug report (`report`).
     Report,
+    /// Run three times as fast while held (`sim::holds::SPRINT`).
+    Sprint,
 }
 
 /// Each action: its settings name, its label, its default key or mouse
 /// button, and whether it is a movement key.
-pub(crate) const ACTIONS: [(Action, &str, &str, Input, bool); 51] = [
+pub(crate) const ACTIONS: [(Action, &str, &str, Input, bool); 52] = [
     (
         Action::Forward,
         "forward",
@@ -455,6 +457,13 @@ pub(crate) const ACTIONS: [(Action, &str, &str, Input, bool); 51] = [
         "Report a bug",
         Input::Key(KeyCode::F12),
         false,
+    ),
+    (
+        Action::Sprint,
+        "sprint",
+        "Sprint (x3)",
+        Input::Key(KeyCode::Backquote),
+        true,
     ),
 ];
 
