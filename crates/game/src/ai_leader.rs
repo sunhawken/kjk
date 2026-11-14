@@ -355,8 +355,14 @@ impl Leader {
         // of it that a way leads to, nearest the body first, then round it, as
         // the playthrough's `approach` picks (kept while the walk lasts).
         let mut spot = spot;
+        // Where the walk heads for `at`: the stand-off short of it toward the
+        // body (`Walk::plan`), which a way must lead to.
+        let stand = spot.stand_off(choice);
         let leads = |at: [f32; 3]| {
-            let g = sim::math::scale(at, 1.0 / sim::motion::UNIT);
+            let feet = sim::target::feet_at(ps.origin);
+            let (dx, dy) = (feet[0] - at[0], feet[1] - at[1]);
+            let length = (dx * dx + dy * dy).sqrt().max(1e-3);
+            let g = sim::math::scale([at[0] + dx / length * stand, at[1] + dy / length * stand, at[2]], 1.0 / sim::motion::UNIT);
             sim::walk::route_ways(level, ps.origin, [g[0], g[1], g[2] - sim::motion::SOLE_Z], &ways).is_some()
         };
         match self.stand_alt {
