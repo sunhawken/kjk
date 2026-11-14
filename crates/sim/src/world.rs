@@ -1088,6 +1088,17 @@ impl SimWorld {
         Some(crate::module::relation(standing, a, b))
     }
 
+    /// The party's way to `module`, asked for by hand: as a script's
+    /// `StartNewModule` would take it. The AI leader skips with it a scene
+    /// that is not play (a cutscene module that does not play out here).
+    pub fn warp(&mut self, module: &str) {
+        self.world.resource_mut::<scripts::Scripts>().new_module = Some(crate::script::NewModule {
+            by: script_ncs::vm::ObjectId(0),
+            module: module.to_string(),
+            tag: String::new(),
+        });
+    }
+
     /// The level the world runs in.
     pub fn level(&self) -> &Level {
         &self.world.resource::<Static>().0

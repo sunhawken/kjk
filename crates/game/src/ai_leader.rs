@@ -180,6 +180,8 @@ pub struct Request {
     pub act: bool,
     /// The walk to the target steers, not the leader's own command.
     pub defer: bool,
+    /// Skip a scene that is not play: go to this area now.
+    pub warp: Option<String>,
 }
 
 impl Leader {
@@ -771,12 +773,15 @@ impl Leader {
                     self.next(tick, "the area is reached");
                     return (Command::default(), actions);
                 }
-                // The story's transition has not come: the last use again (a
-                // pod whose second talk waits on another press).
-                if !in_talk && tick >= self.began + 8 * HZ && tick >= self.last_retry + 8 * HZ && self.module_retries < 4 {
-                    if let Some((tag, nth)) = self.last_use.clone() {
+                // The story's transition has not come: the last use again once (a
+                // pod whose second talk waits on another press), then the scene
+                // that does not play out is skipped: the area is taken.
+                if !in_talk && tick >= self.began + 8 * HZ && tick >= self.last_retry + 8 * HZ {
+                    self.last_retry = tick;
+                    if self.module_retries < 1
+                        && let Some((tag, nth)) = self.last_use.clone()
+                    {
                         self.module_retries += 1;
-                        self.last_retry = tick;
                         info!(target: "ai_leader", "tick {tick} {name} has not come: using {tag} again");
                         self.steps.insert(self.at, Step::Use(tag, nth));
                         self.began = tick;
@@ -785,6 +790,8 @@ impl Leader {
                         self.talked = false;
                         return (Command::default(), actions);
                     }
+                    info!(target: "ai_leader", "tick {tick} {name} has not come from {}: skipping the scene", level.name());
+                    self.request.warp = Some(name.clone());
                 }
                 if tick >= self.began + 120 * HZ {
                     self.next(tick, "gave up: the area did not come");

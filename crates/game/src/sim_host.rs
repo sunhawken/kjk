@@ -2012,6 +2012,9 @@ fn advance(
                     authority.solo.act(action);
                 }
                 let request = leader.take_request();
+                if let Some(module) = &request.warp {
+                    authority.world.warp(module);
+                }
                 if let (Some(pin), Some(pinned)) = (request.pin, pinned.as_deref_mut()) {
                     pinned.0 = pin;
                 }
