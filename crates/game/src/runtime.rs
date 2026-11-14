@@ -144,9 +144,10 @@ pub fn run(options: RunOptions) -> AppExit {
                 .disable::<WinitPlugin>(),
         )
         .add_plugins(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
-            // A fast AI run (`KJK_SIM_SPEED`) takes fewer, longer frames: the
-            // sim catches up in each, the frames' own cost is spent less often.
-            if std::env::var("KJK_SIM_SPEED").is_ok() { 1.0 / 20.0 } else { 1.0 / 60.0 },
+            // A fast AI run (`KJK_SIM_SPEED`) takes frames as fast as they come, each
+            // a few ticks (`KJK_SIM_CAP`): the render side's walks and presses
+            // act once a frame.
+            if std::env::var("KJK_SIM_SPEED").is_ok() { 1.0 / 1000.0 } else { 1.0 / 60.0 },
         )));
     } else {
         app.add_plugins(DefaultPlugins.set(log).set(WindowPlugin {
