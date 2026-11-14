@@ -785,10 +785,12 @@ impl Leader {
                 if level.name().eq_ignore_ascii_case(name) {
                     self.module = level.name().to_string();
                     // What the scene skipped on the way would have started here.
-                    if self.warped {
+                    // (also when the story brought the party here: the scene's end
+                    // does not start them in this build).
+                    if !in_talk {
                         self.request.run = arrival_scripts(name).iter().map(|script| script.to_string()).collect();
-                        self.warped = false;
                     }
+                    self.warped = false;
                     self.next(tick, "the area is reached");
                     return (Command::default(), actions);
                 }

@@ -605,10 +605,14 @@ pub fn install(app: &mut World, setup: SimSetup) -> Result<(), String> {
                 matched: None,
             },
             None => Source::Live {
-                recorder: Some(Box::new(
-                    Recorder::new(rate.hz(), last.clone(), world.level().id(), RECORD_EVERY)
-                        .with_script(world.script_state().clone()),
-                )),
+                // A fast AI run (`KJK_SIM_SPEED`) is hours long: recording it
+                // all would fill memory and disk.
+                recorder: std::env::var("KJK_SIM_SPEED").is_err().then(|| {
+                    Box::new(
+                        Recorder::new(rate.hz(), last.clone(), world.level().id(), RECORD_EVERY)
+                            .with_script(world.script_state().clone()),
+                    )
+                }),
             },
         };
         let request = match lifecycle.as_ref().and_then(|l| l.first.clone()) {
