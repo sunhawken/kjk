@@ -20,7 +20,7 @@ use sim::module::ObjectKind;
 use sim::{Kind, Seat, Snapshot};
 
 /// The routes in story order, main way first, then the branches.
-const ROUTES: &[&str] = &[
+const K1_ROUTES: &[&str] = &[
     include_str!("../../../data/routes/k1/endar_spire.route"),
     include_str!("../../../data/routes/k1/taris_upper_city.route"),
     include_str!("../../../data/routes/k1/taris_lower_city.route"),
@@ -50,6 +50,79 @@ const ROUTES: &[&str] = &[
     include_str!("../../../data/routes/k1/unknown_world_elders.route"),
     include_str!("../../../data/routes/k1/unknown_world_dark.route"),
     include_str!("../../../data/routes/k1/star_forge_dark.route"),
+];
+
+/// The KOTOR 2 routes in chain order (each route after the one whose
+/// checkpoint it starts from).
+const TSL_ROUTES: &[&str] = &[
+    include_str!("../../../data/routes/tsl/prologue.route"),
+    include_str!("../../../data/routes/tsl/peragus_admin.route"),
+    include_str!("../../../data/routes/tsl/planets.route"),
+    include_str!("../../../data/routes/tsl/peragus_t3.route"),
+    include_str!("../../../data/routes/tsl/peragus_tunnels.route"),
+    include_str!("../../../data/routes/tsl/peragus_depot.route"),
+    include_str!("../../../data/routes/tsl/peragus_dorms.route"),
+    include_str!("../../../data/routes/tsl/peragus_harbinger.route"),
+    include_str!("../../../data/routes/tsl/peragus_escape.route"),
+    include_str!("../../../data/routes/tsl/peragus_turret.route"),
+    include_str!("../../../data/routes/tsl/telos_arrest.route"),
+    include_str!("../../../data/routes/tsl/telos_081.route"),
+    include_str!("../../../data/routes/tsl/telos_ithorians.route"),
+    include_str!("../../../data/routes/tsl/telos_cantina_games.route"),
+    include_str!("../../../data/routes/tsl/telos_exchange.route"),
+    include_str!("../../../data/routes/tsl/telos_czerka_files.route"),
+    include_str!("../../../data/routes/tsl/telos_rescue.route"),
+    include_str!("../../../data/routes/tsl/telos_restoration.route"),
+    include_str!("../../../data/routes/tsl/telos_czerka_site.route"),
+    include_str!("../../../data/routes/tsl/telos_military_base.route"),
+    include_str!("../../../data/routes/tsl/telos_base_shuttle.route"),
+    include_str!("../../../data/routes/tsl/telos_polar.route"),
+    include_str!("../../../data/routes/tsl/telos_academy.route"),
+    include_str!("../../../data/routes/tsl/dantooine_khoonda.route"),
+    include_str!("../../../data/routes/tsl/dantooine_cave.route"),
+    include_str!("../../../data/routes/tsl/dantooine_pazaak.route"),
+    include_str!("../../../data/routes/tsl/dantooine_enclave.route"),
+    include_str!("../../../data/routes/tsl/dantooine_vrook.route"),
+    include_str!("../../../data/routes/tsl/dantooine_battle.route"),
+    include_str!("../../../data/routes/tsl/nar_shaddaa_landing.route"),
+    include_str!("../../../data/routes/tsl/nar_shaddaa_exchange.route"),
+    include_str!("../../../data/routes/tsl/nar_shaddaa_pazaak.route"),
+    include_str!("../../../data/routes/tsl/nar_shaddaa_swoop.route"),
+    include_str!("../../../data/routes/tsl/nar_shaddaa_vogga.route"),
+    include_str!("../../../data/routes/tsl/nar_shaddaa_mira.route"),
+    include_str!("../../../data/routes/tsl/nar_shaddaa_tunnels.route"),
+    include_str!("../../../data/routes/tsl/nar_shaddaa_warehouse.route"),
+    include_str!("../../../data/routes/tsl/nar_shaddaa_goto.route"),
+    include_str!("../../../data/routes/tsl/nar_shaddaa_zez.route"),
+    include_str!("../../../data/routes/tsl/dxun_landing.route"),
+    include_str!("../../../data/routes/tsl/dxun_camp.route"),
+    include_str!("../../../data/routes/tsl/dxun_tests.route"),
+    include_str!("../../../data/routes/tsl/dxun_circle.route"),
+    include_str!("../../../data/routes/tsl/dxun_departure.route"),
+    include_str!("../../../data/routes/tsl/onderon_spaceport.route"),
+    include_str!("../../../data/routes/tsl/onderon_alibi.route"),
+    include_str!("../../../data/routes/tsl/onderon_kavar.route"),
+    include_str!("../../../data/routes/tsl/dxun_return.route"),
+    include_str!("../../../data/routes/tsl/korriban_valley.route"),
+    include_str!("../../../data/routes/tsl/korriban_shyrack_cave.route"),
+    include_str!("../../../data/routes/tsl/korriban_secret_tomb.route"),
+    include_str!("../../../data/routes/tsl/korriban_academy.route"),
+    include_str!("../../../data/routes/tsl/korriban_sion.route"),
+    include_str!("../../../data/routes/tsl/finale_dxun.route"),
+    include_str!("../../../data/routes/tsl/finale_sith_tomb.route"),
+    include_str!("../../../data/routes/tsl/finale_sky_ramp.route"),
+    include_str!("../../../data/routes/tsl/finale_palace.route"),
+    include_str!("../../../data/routes/tsl/finale_enclave.route"),
+    include_str!("../../../data/routes/tsl/finale_atris.route"),
+    include_str!("../../../data/routes/tsl/finale_citadel.route"),
+    include_str!("../../../data/routes/tsl/ravager_command_deck.route"),
+    include_str!("../../../data/routes/tsl/ravager_bridge.route"),
+    include_str!("../../../data/routes/tsl/ravager_escape.route"),
+    include_str!("../../../data/routes/tsl/malachor_surface.route"),
+    include_str!("../../../data/routes/tsl/malachor_depths.route"),
+    include_str!("../../../data/routes/tsl/malachor_remote.route"),
+    include_str!("../../../data/routes/tsl/malachor_academy.route"),
+    include_str!("../../../data/routes/tsl/malachor_core.route"),
 ];
 
 /// How near (metres, across the floor) counts as arrived.
@@ -97,12 +170,14 @@ pub struct Objective {
 
 /// Every step of every route, tagged with its stretch (stretches number on
 /// across the routes).
-fn steps() -> &'static [Step] {
-    static STEPS: OnceLock<Vec<Step>> = OnceLock::new();
-    STEPS.get_or_init(|| {
+fn steps(tsl: bool) -> &'static [Step] {
+    static K1_STEPS: OnceLock<Vec<Step>> = OnceLock::new();
+    static TSL_STEPS: OnceLock<Vec<Step>> = OnceLock::new();
+    let (cell, routes) = if tsl { (&TSL_STEPS, TSL_ROUTES) } else { (&K1_STEPS, K1_ROUTES) };
+    cell.get_or_init(|| {
         let mut steps = Vec::new();
         let mut stretch = 0;
-        for text in ROUTES {
+        for text in routes {
             stretch += 1;
             for line in text.lines() {
                 let (code, words) = line.split_once('#').unwrap_or((line, ""));
@@ -175,11 +250,13 @@ fn tag_of(goal: &Goal) -> Option<&str> {
 /// How many stretches of the routes name each tag (lowercase): a tag many
 /// stretches name is a prop every area has (a footlocker, a computer panel,
 /// a plain exit door), not one that tells the areas apart.
-fn spread() -> &'static HashMap<String, usize> {
-    static SPREAD: OnceLock<HashMap<String, usize>> = OnceLock::new();
-    SPREAD.get_or_init(|| {
+fn spread(tsl: bool) -> &'static HashMap<String, usize> {
+    static K1_SPREAD: OnceLock<HashMap<String, usize>> = OnceLock::new();
+    static TSL_SPREAD: OnceLock<HashMap<String, usize>> = OnceLock::new();
+    let cell = if tsl { &TSL_SPREAD } else { &K1_SPREAD };
+    cell.get_or_init(|| {
         let mut stretches: HashMap<String, std::collections::HashSet<usize>> = HashMap::new();
-        for step in steps() {
+        for step in steps(tsl) {
             if let Some(tag) = tag_of(&step.goal) {
                 stretches.entry(tag.to_ascii_lowercase()).or_default().insert(step.stretch);
             }
@@ -191,16 +268,17 @@ fn spread() -> &'static HashMap<String, usize> {
 /// A tag that tells areas apart: named by few stretches.
 const DISTINCTIVE_MOST: usize = 4;
 
-fn distinctive(tag: &str) -> bool {
-    spread().get(&tag.to_ascii_lowercase()).is_none_or(|count| *count <= DISTINCTIVE_MOST)
+fn distinctive(tsl: bool, tag: &str) -> bool {
+    spread(tsl).get(&tag.to_ascii_lowercase()).is_none_or(|count| *count <= DISTINCTIVE_MOST)
 }
 
 /// The steps that apply in `level`: those in the stretches most of whose
 /// named objects stand in it, in story order.
 fn applicable(level: &sim::Level) -> Vec<Step> {
+    let tsl = level.module().is_some_and(|module| module.game == "tsl");
     let mut named: HashMap<usize, (usize, usize)> = HashMap::new();
-    for step in steps() {
-        if let Some(tag) = tag_of(&step.goal).filter(|tag| distinctive(tag)) {
+    for step in steps(tsl) {
+        if let Some(tag) = tag_of(&step.goal).filter(|tag| distinctive(tsl, tag)) {
             let entry = named.entry(step.stretch).or_default();
             entry.1 += 1;
             if level.placed().iter().any(|object| object.tag.eq_ignore_ascii_case(tag)) {
@@ -212,7 +290,7 @@ fn applicable(level: &sim::Level) -> Vec<Step> {
         let mut shown: Vec<_> = named.iter().filter(|(_, (found, _))| *found > 0).collect();
         shown.sort();
         for (stretch, (found, all)) in shown {
-            let here: Vec<&str> = steps()
+            let here: Vec<&str> = steps(tsl)
                 .iter()
                 .filter(|step| step.stretch == *stretch)
                 .filter_map(|step| tag_of(&step.goal))
@@ -221,7 +299,7 @@ fn applicable(level: &sim::Level) -> Vec<Step> {
             bevy::log::info!(target: "quest", "{}: stretch {stretch} names {found} of {all} here: {here:?}", level.name());
         }
     }
-    steps()
+    steps(tsl)
         .iter()
         .filter(|step| named.get(&step.stretch).is_some_and(|(found, all)| *found > 0 && *found * 2 >= *all))
         .filter(|step| tag_of(&step.goal).is_none_or(|tag| level.placed().iter().any(|object| object.tag.eq_ignore_ascii_case(tag))))
@@ -310,7 +388,7 @@ fn scan(level: &sim::Level, steps: &[Step]) -> Vec<Stash> {
             if names.is_empty() && !(wanted && object.kind == ObjectKind::Placeable) {
                 return None;
             }
-            let holder = if object.name.is_empty() { object.tag.clone() } else { object.name.clone() };
+            let holder = if object.name.is_empty() { object.tag.clone() } else { plain(&object.name) };
             let what = match names.as_slice() {
                 [] => "Items".to_string(),
                 [one] => one.clone(),
@@ -382,6 +460,22 @@ fn read(level: &sim::Level, snapshot: &Snapshot, me: [f32; 3], step: &Step) -> O
     }
 }
 
+/// A name without its `{...}` hint tags (KOTOR 2's containers carry them:
+/// `Medical Bay Container{Chems}`).
+fn plain(name: &str) -> String {
+    let mut out = String::new();
+    let mut depth = 0u32;
+    for c in name.chars() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    out.trim().to_string()
+}
+
 /// The objective's words: its route comment, short.
 fn short(words: &str) -> String {
     let words = words.split(['(', ';', ':']).next().unwrap_or(words).trim();
@@ -407,7 +501,7 @@ fn fallback(level: &sim::Level, snapshot: &Snapshot, me: [f32; 3]) -> Vec<Object
                     !snapshot.in_party(entity) && entity.fighter.as_ref().is_some_and(|fighter| fighter.alive())
                 });
                 if alive {
-                    let name = if object.name.is_empty() { object.tag.clone() } else { object.name.clone() };
+                    let name = if object.name.is_empty() { object.tag.clone() } else { plain(&object.name) };
                     talkers.push(Objective { at, label: format!("Talk to {name}") });
                 }
             }
@@ -546,7 +640,7 @@ mod tests {
 
     #[test]
     fn the_routes_parse_into_stretches_with_words() {
-        let all = steps();
+        let all = steps(false);
         assert!(all.len() > 500, "{} steps", all.len());
         let door = all.iter().find(|step| matches!(&step.goal, Goal::Use { tag, .. } if tag == "end_door04")).unwrap();
         assert!(door.words.contains("pods"), "{door:?}");
@@ -555,7 +649,7 @@ mod tests {
 
     #[test]
     fn stretches_only_grow_and_goals_are_sane() {
-        let all = steps();
+        let all = steps(false);
         let mut last = 0;
         for step in all {
             assert!(step.stretch >= last, "{step:?}");
@@ -571,7 +665,7 @@ mod tests {
 
     #[test]
     fn every_route_gives_steps() {
-        for (number, text) in ROUTES.iter().enumerate() {
+        for (number, text) in K1_ROUTES.iter().enumerate() {
             assert!(
                 text.lines().any(|line| {
                     let verb = line.split('#').next().unwrap_or("").split_whitespace().next().unwrap_or("");
@@ -591,8 +685,34 @@ mod tests {
     }
 
     #[test]
+    fn plain_drops_hint_tags() {
+        assert_eq!(plain("Medical Bay Container{Chems}"), "Medical Bay Container");
+        assert_eq!(plain("Corpse{Morgue}{x}"), "Corpse");
+        assert_eq!(plain("{only}"), "");
+        assert_eq!(plain("a}b"), "ab");
+    }
+
+    #[test]
     fn short_keeps_the_first_clause() {
         assert_eq!(short("the pods' door (Carth behind it)"), "the pods' door");
         assert_eq!(short(""), "Next objective");
+    }
+}
+
+#[cfg(test)]
+mod tsl_tests {
+    use super::*;
+
+    #[test]
+    fn the_kotor_2_routes_parse_into_steps() {
+        let all = steps(true);
+        assert!(all.len() > 500, "{} steps", all.len());
+        assert!(all.iter().any(|step| matches!(step.goal, Goal::Use { .. })));
+        assert!(all.iter().any(|step| matches!(step.goal, Goal::Exit { .. })));
+        let mut last = 0;
+        for step in all {
+            assert!(step.stretch >= last, "{step:?}");
+            last = step.stretch;
+        }
     }
 }
