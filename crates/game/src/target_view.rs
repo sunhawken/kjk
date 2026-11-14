@@ -280,9 +280,6 @@ fn target(
     let (Some(presented), Some(swap), Some(look), Some((me, ps))) =
         (&presented, &swap, looking, me)
     else {
-        if pinned.0.is_some() && now_ms_for_log().is_multiple_of(2) {
-            info!(target: "ai_leader", "pinned {:?} but no target: presented {} swap {} looking {} me {} ui_open {:?}", pinned.0, presented.is_some(), swap.is_some(), looking.is_some(), me.is_some(), ui.stack.screens().map(|id| format!("{id:?}")).collect::<Vec<_>>());
-        }
         targeted.hold = Hold::default();
         targeted.object = None;
         targeted.choices.clear();
@@ -725,11 +722,4 @@ fn transition(
             }))),
         );
     }
-}
-
-/// Seconds of wall time (to thin a log line to every other second).
-fn now_ms_for_log() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
 }
