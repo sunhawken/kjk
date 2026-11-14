@@ -57,6 +57,8 @@ save kas_starmap
 to kas25_kinrath         # a viper kinrath: its body is the ritual's bait
 fight 15
 use kas25_kinrath        # its remains: the body
+use kas25_kinrath@2      # (the herd's others: the body's item lies on whichever fell with it)
+use kas25_kinrath@3
 use kas25_ritualvine     # hung on the vine: the ancient beast comes
 talk
 fight 25

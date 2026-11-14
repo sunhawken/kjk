@@ -34,6 +34,9 @@ pub(super) enum Goal {
     Global(String, Result<i32, bool>),
     /// The party's credits set.
     Gold(i32),
+    /// Items of a template put into the party's inventory (a test aid: a
+    /// route that tries the partner's medpacs).
+    Give(String, u16),
     /// The player's rank in a skill set (a build the route stands in for).
     Skill(usize, u8),
     /// The party installed in a module, arriving at a tag (none: where the
@@ -377,6 +380,13 @@ pub(super) fn parse(route: &str) -> Result<Vec<(String, Goal)>, String> {
                 }),
                 "pazaak" => Goal::Pazaak,
                 "save" => Goal::Save(a.ok_or(format!("{part}: save NAME"))?.to_string()),
+                "give" => {
+                    let rest = a.ok_or(format!("{part}: give TEMPLATE [N]"))?;
+                    let mut words = rest.split_whitespace();
+                    let template = words.next().ok_or(format!("{part}: give TEMPLATE [N]"))?;
+                    let count = words.next().and_then(|n| n.parse::<u16>().ok()).unwrap_or(1);
+                    Goal::Give(template.to_string(), count)
+                }
                 "gold" => Goal::Gold(
                     a.and_then(|gold| gold.parse::<i32>().ok())
                         .ok_or(format!("{part}: gold N"))?,

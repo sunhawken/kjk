@@ -234,6 +234,8 @@ pub(crate) struct Joined {
     /// The level the client plays in now (the stage's, then each install's).
     level: Level,
     driver: Driver,
+    /// The AI seat's policy, when `KJK_AI_SEAT` is set (`ai_seat`).
+    ai: Option<crate::ai_seat::AiSeat>,
     look: Look,
     controls: Controls,
     lifecycle: Option<Lifecycle>,
@@ -300,6 +302,7 @@ pub fn install(
         joining,
         level,
         driver,
+        ai: std::env::var_os("KJK_AI_SEAT").map(|_| crate::ai_seat::AiSeat::new()),
         look: Look {
             pitch: 0.0,
             yaw: 0.0,
@@ -570,7 +573,52 @@ pub(crate) fn advance(
         selected.0 = joined.controls.power;
     }
     let rate = TickRate::default();
+    let seat = joined.joining.seat;
+    let level = joined.level.clone();
+    // Reply texts for the conversation the seat stands in, only when the AI
+    // has been handed the choices (the library's replies, the install's text).
+    let reply_texts: Vec<String> = match (
+        joined.ai.as_ref().and_then(|ai| ai.delegate),
+        joined.lifecycle.as_ref(),
+    ) {
+        (Some(_), Some(lifecycle)) => own
+            .presented
+            .current()
+            .talk_for(seat)
+            .map(|talk| {
+                let said = |strref| lifecycle.installer.text(strref);
+                talk.replies
+                    .iter()
+                    .map(|reply| {
+                        level
+                            .scripts()
+                            .and_then(|library| library.dialogue(&talk.dialog))
+                            .and_then(|dlg| dlg.replies.get(*reply as usize))
+                            .map_or_else(String::new, |node| crate::transcript::text(&said, node))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    let ai_command = match (joined.ai.as_mut(), next_tick) {
+        (Some(ai), Some(tick)) => Some(ai.decide(
+            &level,
+            own.presented.current(),
+            presented.0.current(),
+            &reply_texts,
+            seat,
+            tick,
+        )),
+        _ => None,
+    };
+    let ai_actions = joined
+        .ai
+        .as_mut()
+        .map(|ai| ai.take_actions())
+        .unwrap_or_default();
     let command = match (&joined.driver, &actions, next_tick) {
+        _ if ai_command.is_some() => ai_command.unwrap_or_default(),
         (Driver::Player(Some(script)), _, Some(tick)) => {
             let mut command = script.command(rate.time_ms(tick.saturating_sub(1)));
             command.reply = joined.controls.scripted(command.reply);
@@ -587,6 +635,9 @@ pub(crate) fn advance(
     };
     // The frame predicts with the client locked: the net thread waits.
     let mut client = lock(&joined.joining.client);
+    for action in ai_actions {
+        client.act(action);
+    }
     let span = info_span!("net.frame").entered();
     let frame = client.frame(now, command);
     drop(span);

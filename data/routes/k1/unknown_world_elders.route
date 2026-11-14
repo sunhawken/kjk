@@ -39,7 +39,8 @@ exit unk41_goto41aabr
 exit unk41_goto41ada
 exit unk41_goto41abd
 exit RakataDoor2
-talk
+# (the Elders speak first only where their trigger had not fired on the first visit: the install here
+# fires it once, so the next lines go to the Elder himself)
 module unk_m42aa
 say i want to enter the temple now
 use unk42_redelder       # to the temple: their ritual (UNK_TEMPLEREADY)

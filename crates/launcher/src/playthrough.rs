@@ -373,6 +373,9 @@ pub struct Options {
     /// Two phantom guests fly remote droids at random, every button of
     /// their kit pressed (`--droids chaos`, `chaos`).
     pub droids: bool,
+    /// With `droids`: the second seat is the AI partner, a guest who takes a
+    /// companion and plays it through `kjk_game::ai_seat` (`--droids ai`).
+    pub ai_partner: bool,
     /// A build's text (`--build`, `build::parse`): the character a new
     /// game makes, and the plan every level taken follows.
     pub build: Option<String>,
@@ -450,9 +453,9 @@ pub fn run(discovery: &Discovery, options: &Options) -> ExitCode {
             crate::by_hand::set_globals(&mut world, &options.globals);
             crate::by_hand::queue_scripts(&mut world, &options.scripts)?;
             if options.droids {
-                world.set_seats_held(chaos::HELD);
+                world.set_seats_held(if options.ai_partner { 2 } else { chaos::HELD });
             }
-            let mut watch = chaos::Watch::new(options.droids);
+            let mut watch = chaos::Watch::new(options.droids, options.ai_partner);
             let mut last = world.snapshot();
             let mut recorder = sim::Recorder::new(rate.hz(), last.clone(), world.level().id(), 100)
                 .with_script(world.script_state().clone());
@@ -744,10 +747,16 @@ pub fn run(discovery: &Discovery, options: &Options) -> ExitCode {
                     world.set_player_skill(*row, *rank);
                     met = true;
                 }
+                if let Goal::Give(template, count) = goal {
+                    match world.give_party_item(template, *count) {
+                        Ok(()) => met = true,
+                        Err(why) => eprintln!("give {template}: {why}"),
+                    }
+                }
                 // What a route sets by hand no input makes, so no replay
                 // reaches it: the recording so far is kept beside, and one
                 // starts from here.
-                if matches!(goal, Goal::Global(..) | Goal::Gold(_) | Goal::Skill(..)) {
+                if matches!(goal, Goal::Global(..) | Goal::Gold(_) | Goal::Skill(..) | Goal::Give(..)) {
                     let fresh =
                         sim::Recorder::new(rate.hz(), world.snapshot(), world.level().id(), 100)
                             .with_script(world.script_state().clone());
@@ -1136,6 +1145,7 @@ pub fn run(discovery: &Discovery, options: &Options) -> ExitCode {
                         | Goal::Save(_)
                         | Goal::Global(..)
                         | Goal::Gold(_)
+                        | Goal::Give(..)
                         | Goal::Skill(..)
                         | Goal::Goto(..) => {}
                         // Picked once what the map's use plays out (its
