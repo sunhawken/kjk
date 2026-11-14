@@ -928,3 +928,23 @@ lost box (`lost`, on `confirm`) open on every seat, from the snapshot's
 has no button.
 
 Waiting: screenshots in the save list.
+
+## Quest markers
+
+`quest.rs`: where the main quest goes next, from the K1 walkthrough routes
+(`data/routes/k1/*.route`, embedded). The current objective shows in the
+world over its place (gold words, "Use the pods' door 24 m", with an arrow
+at the window's edge when it is off the screen) and on the map page, with
+the next three numbered; the dump's `quest` and `quest_marker`. A step is
+done when its door is open, its point or object reached, its fight over;
+a later step plainly done (a door open, a point reached) moves the
+objective on. `KJK_QUEST_MARKERS=0` turns it off. The routes are the
+light-side main way first, their branches after.
+
+Items that may be needed (`quest::pickups`): containers and creatures of the
+area holding an item the game marks plot, or whose tag names a key, spike,
+card, datapad, sample, disk, tome, holocron, medal, badge, ticket or fuse,
+and any container a route step uses. Cyan `* Computer Spike +4 (Footlocker)
+2 m` over each of the nearest six within 25 m, starred notes on the map
+page; one is dropped once the player has been up to the container, or to the
+creature's remains. The dump's `quest_items` and `quest_item_marker`.

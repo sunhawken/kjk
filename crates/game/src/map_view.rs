@@ -138,7 +138,7 @@ pub(crate) fn page(
     let body = snapshot.body(seat);
     let instances = sim::Instances::in_snapshot(level, snapshot);
     let fog = fog(module, snapshot);
-    let notes = snapshot
+    let mut notes: Vec<MapNoteView> = snapshot
         .entities
         .iter()
         .filter(|entity| matches!(entity.kind, Kind::Object(ObjectKind::Waypoint, _)))
@@ -152,6 +152,18 @@ pub(crate) fn page(
             })
         })
         .collect();
+    // The quest's objectives, the current one first, numbered (`quest`).
+    notes.extend(crate::quest::upcoming(level.name()).into_iter().enumerate().map(|(number, objective)| {
+        MapNoteView {
+            at: map.point([objective.at[0], objective.at[1]]),
+            text: format!("{}. {}", number + 1, objective.label).into_bytes(),
+        }
+    }));
+    // And the items that may be needed, starred (`quest::pickups`).
+    notes.extend(crate::quest::pickups(level.name()).into_iter().map(|pickup| MapNoteView {
+        at: map.point([pickup.at[0], pickup.at[1]]),
+        text: format!("* {}", pickup.label).into_bytes(),
+    }));
     Some(MapView {
         area,
         picture: picture(assets, module),

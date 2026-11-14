@@ -20,6 +20,9 @@ macro_rules! outln {
 }
 
 pub mod acting;
+pub mod ai_brain;
+pub mod ai_leader;
+pub mod ai_seat;
 mod aim_fx;
 mod ambience;
 pub mod arena;
@@ -106,6 +109,7 @@ mod power_fx;
 #[cfg(feature = "probes")]
 mod probe_kit;
 mod progress;
+mod quest;
 mod ragdolls;
 pub mod report;
 mod rulebook_text;
@@ -238,6 +242,10 @@ fn net_play_options<'a>(
 #[derive(Clone, Copy, Default)]
 pub struct ByHandParty<'a> {
     pub followers: &'a [String],
+    /// Tags of the first module's creatures turned hostile, and to the
+    /// players' side, before it is installed (`--hostile`, `--ally`).
+    pub hostile: &'a [String],
+    pub allies: &'a [String],
     pub gold: Option<i32>,
     pub items: &'a [(String, u16)],
     pub xp: Option<i32>,
@@ -292,6 +300,8 @@ pub fn host_session(
     };
     let ByHandParty {
         followers,
+        hostile,
+        allies,
         gold,
         items,
         xp,
@@ -303,6 +313,8 @@ pub fn host_session(
         guests: spec.guests,
         save: spec.save,
         followers,
+        hostile,
+        allies,
         gold,
         items,
         xp,
@@ -429,6 +441,10 @@ pub struct JoinSpec<'a> {
     pub sim_blades: bool,
     pub plan_delay: std::time::Duration,
     pub trace: Option<&'a std::path::Path>,
+    /// The host's `--hostile` and `--ally` tags: the stage built here must
+    /// be the host's world, or the module's data differs.
+    pub hostile: &'a [String],
+    pub allies: &'a [String],
 }
 
 /// A joined session ready to run: the host answered, its stage loaded
@@ -474,6 +490,8 @@ pub fn join_session(
         aim: None,
         trace: spec.trace,
         sim_blades: spec.sim_blades,
+        hostile: spec.hostile,
+        allies: spec.allies,
         ..net_play_options(
             &stage,
             arrive.as_deref(),

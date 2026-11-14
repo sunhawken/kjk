@@ -384,13 +384,15 @@ pub(super) fn interact(
             let Some(link) = facts.exit() else {
                 continue;
             };
-            let inside = standing
-                && object.state.state != 0
-                && in_doorway(&level.0, object.index, user.origin, user.maxs_z);
+            // Tenancy follows where the body stands, the door open or not:
+            // one a script opens over a body already standing there (a
+            // guest's companion arriving in the doorway) is not entering it.
+            let inside = standing && in_doorway(&level.0, object.index, user.origin, user.maxs_z);
+            let open = object.state.state != 0;
             let tenant = object.state.tenants & bit != 0;
             if inside && !tenant {
                 object.state.tenants |= bit;
-                if !held {
+                if open && !held {
                     asks.push(ask(id, link, seat, Some(object.index)));
                 }
             } else if !inside && tenant {

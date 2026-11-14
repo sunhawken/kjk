@@ -39,6 +39,13 @@ pub(crate) struct JoinArgs {
     /// The host's join password (`kjk host --password`)
     #[arg(long)]
     password: Option<String>,
+    /// The host's `--hostile` tags: this machine must build the same
+    /// world (repeatable)
+    #[arg(long)]
+    hostile: Vec<String>,
+    /// The host's `--ally` tags (repeatable)
+    #[arg(long)]
+    ally: Vec<String>,
 }
 
 /// `kjk join`: joins the host, loads its stage, and plays in it.
@@ -59,6 +66,8 @@ pub(crate) fn run(args: JoinArgs, size: (u32, u32)) -> ExitCode {
         sim_blades: args.sim_blades,
         plan_delay: std::time::Duration::from_secs_f64(args.plan_delay.clamp(0.0, 600.0)),
         trace: args.trace.as_deref(),
+        hostile: &args.hostile,
+        allies: &args.ally,
     };
     // The host's module is known once it answers: the screen shows none.
     launch(

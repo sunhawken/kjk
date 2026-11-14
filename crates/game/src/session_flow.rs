@@ -378,6 +378,8 @@ fn prepare(intent: SessionIntent) -> Receiver<Progress> {
                             sim_blades: false,
                             plan_delay: std::time::Duration::ZERO,
                             trace: None,
+                            hostile: &[],
+                            allies: &[],
                         },
                     )
                 })
