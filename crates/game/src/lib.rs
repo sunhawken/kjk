@@ -21,6 +21,7 @@ macro_rules! outln {
 
 pub mod acting;
 pub mod ai_brain;
+pub mod ai_leader;
 pub mod ai_seat;
 mod aim_fx;
 mod ambience;
