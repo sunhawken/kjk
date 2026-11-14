@@ -589,6 +589,13 @@ impl Leader {
                     self.next(tick, "the area changed");
                     return (Command::default(), actions);
                 }
+                // A container opens no conversation: one in progress (a terminal's
+                // beside it, a call) is not the use's, so it is seen through
+                // without ending the step.
+                let container = me.is_some_and(|me| Self::find(level, tag, *nth, me).is_some_and(|(_, object)| object.container));
+                if in_talk && container && !exit {
+                    return (self.ai.decide(level, snapshot, snapshot, texts, SEAT, tick), actions);
+                }
                 if in_talk && !exit {
                     // The use opened a conversation: it is seen through
                     // (the replies chosen by the policy) before the plan goes on.
