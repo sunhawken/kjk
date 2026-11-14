@@ -95,6 +95,25 @@ impl Accumulator {
         due
     }
 
+    /// `advance` with wall time run `scale` times faster and up to `cap`
+    /// ticks a call: a headless run of an AI's play, which has no screen to
+    /// keep pace with.
+    pub fn advance_scaled(&mut self, elapsed: Duration, scale: f32, cap: u32) -> Vec<(u64, u32)> {
+        self.residual_ns += (elapsed.as_nanos() as f64 * f64::from(scale)) as u64;
+        let mut due = Vec::new();
+        loop {
+            let msec = self.rate.msec(self.tick + 1);
+            let needed = u64::from(msec) * 1_000_000;
+            if self.residual_ns < needed || due.len() as u32 == cap {
+                break;
+            }
+            self.residual_ns -= needed;
+            self.tick += 1;
+            due.push((self.tick, msec));
+        }
+        due
+    }
+
     /// How far wall time is into the next tick, from 0 to 1: what the
     /// presentation blends the last two snapshots by.
     pub fn alpha(&self) -> f32 {
