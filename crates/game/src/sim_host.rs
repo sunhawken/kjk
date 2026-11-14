@@ -1813,7 +1813,7 @@ fn advance(
             }
             None => match (authority.leader.is_some(), std::env::var("KJK_SIM_SPEED").ok().and_then(|v| v.parse::<f32>().ok())) {
                 // The AI leader's headless play may run faster than the clock.
-                (true, Some(speed)) if speed > 1.0 => authority.clock.advance_scaled(time.delta(), speed, 64),
+                (true, Some(speed)) if speed > 1.0 => authority.clock.advance_scaled(time.delta(), speed, 4000),
                 _ => authority.clock.advance(time.delta()),
             },
         }
