@@ -114,6 +114,7 @@ mod power_fx;
 #[cfg(feature = "probes")]
 mod probe_kit;
 pub mod progress;
+mod quest;
 mod ragdolls;
 pub mod report;
 pub mod reticle_view;
