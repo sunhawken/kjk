@@ -487,7 +487,18 @@ pub fn update(level: &sim::Level, snapshot: &Snapshot, seat: Seat) {
     }
     // An area the routes name nothing of: its talkers and exits, the nearest
     // first, so the player still has somewhere to be pointed.
-    let ahead = if ahead.is_empty() && state.steps.is_empty() { fallback(level, snapshot, me) } else { ahead };
+    // Or, where the routes give only a little, filled out with them.
+    let ahead = if ahead.len() < 3 {
+        let mut all = ahead;
+        for objective in fallback(level, snapshot, me) {
+            if all.len() < ON_MAP && all.iter().all(|have| flat(have.at, objective.at) > 1.0) {
+                all.push(objective);
+            }
+        }
+        all
+    } else {
+        ahead
+    };
     state.ahead = ahead;
     // What may be needed and not yet gathered: gone from the list once the
     // player has been up to it (a container) or to its remains (a creature).
